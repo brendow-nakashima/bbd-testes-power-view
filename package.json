@@ -1,0 +1,17 @@
+{
+  "name": "alerta24h-api-tests",
+  "version": "1.0.0",
+  "description": "Testes de API do ecossistema Alerta24h usando Newman/Postman",
+  "scripts": {
+    "setup": "rm -rf node_modules && rm -f package-lock.json && npm install",
+    "test:local": "./bin/run-tests.sh local",
+    "test:events": "./bin/run-tests.sh local events-processing",
+    "test:alert": "./bin/run-tests.sh local alert-service"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "newman": "^6.2.1",
+    "newman-reporter-htmlextra": "^1.22.11"
+  }
+}

@@ -1,0 +1,309 @@
+{
+  "info": {
+    "_postman_id": "a24h-events-processing-0001",
+    "name": "alerta24h-events-processing",
+    "description": "Smoke tests do serviço events-processing (Alerta24h).\n\nAuth: header `x-api-key` **criptografado** — AES-128-ECB/PKCS5 + Base64 da `EVENTS_API_KEY_RAW` com a chave `EVENTS_API_KEY_SECRET`. O valor é calculado no pre-request da coleção via CryptoJS e exposto como a variável `EVENTS_API_KEY`.\n\nPré-requisito: o `EVENTS_DEVICE_ID` precisa existir na tabela `devices` (o serviço rejeita devices desconhecidos). Em local há um device-seed `00000000-0000-0000-0000-000000000001`.\n\nIngestão MQTT não é coberta aqui (Newman não fala MQTT) — use `bin/mqtt-pub.sh` para alimentar dados antes de validar via HTTP.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-api-key", "type": "string" },
+      { "key": "value", "value": "{{EVENTS_API_KEY}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Gera o x-api-key criptografado (espelha AES/ECB/PKCS5PADDING + Base64 do backend).",
+          "var raw = pm.environment.get('EVENTS_API_KEY_RAW');",
+          "var secret = pm.environment.get('EVENTS_API_KEY_SECRET');",
+          "if (raw && secret) {",
+          "    var key = CryptoJS.enc.Utf8.parse(secret);",
+          "    var enc = CryptoJS.AES.encrypt(raw, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 });",
+          "    pm.collectionVariables.set('EVENTS_API_KEY', enc.toString());",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "EVENTS_API_KEY", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "[00] Saúde",
+      "item": [
+        {
+          "name": "Health (actuator)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status = UP', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b.status).to.eql('UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/actuator/health",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["actuator", "health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[01] Telemetria",
+      "item": [
+        {
+          "name": "Telemetria do dispositivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Tem meters e status', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.have.property('meters');",
+                  "    pm.expect(b).to.have.property('status');",
+                  "    pm.expect(b.meters).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/telemetries/{{EVENTS_DEVICE_ID}}",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "telemetries", "{{EVENTS_DEVICE_ID}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[02] Timelines",
+      "item": [
+        {
+          "name": "Timeline do dispositivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Resposta é array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/timelines/{{EVENTS_DEVICE_ID}}",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "timelines", "{{EVENTS_DEVICE_ID}}"]
+            }
+          }
+        },
+        {
+          "name": "Timeline consolidada do dispositivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/consolidated-timelines/{{EVENTS_DEVICE_ID}}",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "consolidated-timelines", "{{EVENTS_DEVICE_ID}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[03] Status do Dispositivo",
+      "item": [
+        {
+          "name": "Status do dispositivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Tem meterType', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(JSON.stringify(b)).to.include('meterType');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/devices/status/{{EVENTS_DEVICE_ID}}",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "status", "{{EVENTS_DEVICE_ID}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[04] Tasks",
+      "item": [
+        {
+          "name": "Tasks do dispositivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks/{{EVENTS_DEVICE_ID}}",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "tasks", "{{EVENTS_DEVICE_ID}}"]
+            }
+          }
+        },
+        {
+          "name": "Tipos de task",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Array de {id, description}', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(b[0]).to.have.property('id');",
+                  "    pm.expect(b[0]).to.have.property('description');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks/types",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "tasks", "types"]
+            }
+          }
+        },
+        {
+          "name": "Frequências de task",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Array de {id, description}', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(b[0]).to.have.property('id');",
+                  "    pm.expect(b[0]).to.have.property('description');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks/frequencies",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "tasks", "frequencies"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[05] Erros de Autenticação",
+      "item": [
+        {
+          "name": "[Erro] Telemetria sem x-api-key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401 sem autenticação', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/telemetries/{{EVENTS_DEVICE_ID}}",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "telemetries", "{{EVENTS_DEVICE_ID}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

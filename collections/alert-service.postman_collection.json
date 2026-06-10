@@ -1,0 +1,257 @@
+{
+  "info": {
+    "_postman_id": "a24h-alert-service-0001",
+    "name": "alerta24h-alert-service",
+    "description": "Smoke tests do serviço alert-service (CORE) do Alerta24h.\n\nAuth heterogênea (ver SecurityConfiguration + ApiKeyFilter):\n- `/auth/**`, `/actuator/**`, `/swagger-ui/**`, `/v3/api-docs/**` são PÚBLICOS (sem x-api-key).\n- Todo `/api/v1/*` passa pelo `ApiKeyFilter` (exceto `/api/v1/users/activate` e `/api/v1/notificables/activate`): exige o header `x-api-key` **criptografado** (AES-128-ECB/PKCS5 + Base64 da `ALERT_API_KEY_RAW` com a chave `ALERT_API_KEY_SECRET`). O valor é calculado no pre-request da coleção e exposto como `{{ALERT_API_KEY}}`.\n- Após o ApiKeyFilter, o Spring Security aplica JWT: `/api/v1/public/**` e `GET /api/v1/admin/**` são permitAll (bastam o x-api-key); os demais `/api/v1/**` exigem também o Bearer JWT.\n\nComportamentos reais validados (2026-06-10) contra o serviço em localhost:8081:\n- sem x-api-key em `/api/v1/*` -> 403; x-api-key inválida -> 401; endpoint autenticado sem JWT -> 403; login inválido -> 500.\n\nFora de escopo (smoke read-only): o fluxo JWT (registrar usuario -> ativar por token de e-mail -> login) cria dados e depende do token de ativação; os usuários-seed da migration V4 NÃO logam (senha placeholder).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-api-key", "type": "string" },
+      { "key": "value", "value": "{{ALERT_API_KEY}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Gera o x-api-key criptografado (espelha AES/ECB/PKCS5PADDING + Base64 do backend).",
+          "var raw = pm.environment.get('ALERT_API_KEY_RAW');",
+          "var secret = pm.environment.get('ALERT_API_KEY_SECRET');",
+          "if (raw && secret) {",
+          "    var key = CryptoJS.enc.Utf8.parse(secret);",
+          "    var enc = CryptoJS.AES.encrypt(raw, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 });",
+          "    pm.collectionVariables.set('ALERT_API_KEY', enc.toString());",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "ALERT_API_KEY", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "[00] Saúde",
+      "item": [
+        {
+          "name": "Health (actuator)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status = UP', function () {",
+                  "    pm.expect(pm.response.json().status).to.eql('UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/actuator/health",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["actuator", "health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[01] Schemas Públicos",
+      "item": [
+        {
+          "name": "Tipos de usuário",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Array de {name, description}', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(b[0]).to.have.property('name');",
+                  "    pm.expect(b[0]).to.have.property('description');",
+                  "});",
+                  "pm.test('Inclui RESIDENTIAL', function () {",
+                  "    var nomes = pm.response.json().map(function (x) { return x.name; });",
+                  "    pm.expect(nomes).to.include('RESIDENTIAL');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/public/schema/users/types",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "public", "schema", "users", "types"]
+            }
+          }
+        },
+        {
+          "name": "Assuntos de suporte",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Array de {name, value}', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(b[0]).to.have.property('name');",
+                  "    pm.expect(b[0]).to.have.property('value');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/public/schema/support/subjects",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "public", "schema", "support", "subjects"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[02] Erros de Autenticação",
+      "item": [
+        {
+          "name": "[Erro] /api/v1 sem x-api-key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 403 sem x-api-key', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/public/schema/users/types",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "public", "schema", "users", "types"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] x-api-key inválida",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401 com x-api-key inválida', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [
+              { "key": "x-api-key", "value": "chave-invalida-nao-criptografada", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/public/schema/users/types",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "public", "schema", "users", "types"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] Endpoint autenticado sem JWT (com x-api-key)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 403 sem JWT', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] Login inválido não retorna token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login inválido não autentica (sem 2xx)', function () {",
+                  "    pm.expect(pm.response.code).to.be.within(400, 599);",
+                  "});",
+                  "pm.test('Resposta não contém token', function () {",
+                  "    pm.expect(pm.response.text()).to.not.include('token');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"naoexiste@example.com\",\n  \"password\": \"senha-invalida\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
