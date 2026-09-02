@@ -168,9 +168,27 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
-                  "pm.test('Tem meterType', function () {",
+                  "pm.test('Tem o formato de status composto', function () {",
                   "    var b = pm.response.json();",
-                  "    pm.expect(JSON.stringify(b)).to.include('meterType');",
+                  "    pm.expect(b).to.have.property('deviceId');",
+                  "    pm.expect(b.online).to.be.a('boolean');",
+                  "    pm.expect(b.indicators).to.be.an('array');",
+                  "});",
+                  "pm.test('Indicadores trafegam chave, nao texto', function () {",
+                  "    var b = pm.response.json();",
+                  "    b.indicators.forEach(function (i) {",
+                  "        pm.expect(i).to.have.property('key');",
+                  "        pm.expect(i.active).to.be.a('boolean');",
+                  "        pm.expect(i).to.have.property('descriptionKey');",
+                  "    });",
+                  "    // rotulo pronto em PT-BR nao pode voltar a vazar por este endpoint",
+                  "    pm.expect(JSON.stringify(b)).to.not.include('meterType');",
+                  "    pm.expect(JSON.stringify(b)).to.not.include('\"description\"');",
+                  "});",
+                  "pm.test('Traz a linha de conexao', function () {",
+                  "    var b = pm.response.json();",
+                  "    var keys = b.indicators.map(function (i) { return i.key; });",
+                  "    pm.expect(keys).to.include('connectionStatus');",
                   "});"
                 ]
               }
@@ -270,6 +288,66 @@
               "host": ["{{EVENTS_BASE_URL}}"],
               "path": ["api", "v1", "tasks", "frequencies"]
             }
+          }
+        },
+        {
+          "name": "Agendar comando de tomada (F1 da 113)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Agenda o comando para daqui a poucos minutos, no formato que a tela usa:",
+                  "// `${date}T${time}`, sem segundos e sem fuso. O backend interpreta no",
+                  "// spring.jackson.time-zone (America/Sao_Paulo), que e o fuso desta maquina.",
+                  "var minutos = Number(pm.environment.get('F1_MINUTOS_A_FRENTE') || 3);",
+                  "var d = new Date(Date.now() + minutos * 60 * 1000);",
+                  "var p = function (n) { return String(n).padStart(2, '0'); };",
+                  "var stamp = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +",
+                  "            'T' + p(d.getHours()) + ':' + p(d.getMinutes());",
+                  "pm.collectionVariables.set('F1_EXECUTION_AT', stamp);",
+                  "console.log('[F1] executionAt = ' + stamp + '  (agora: ' + new Date().toString() + ')');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Resposta traz taskId e status', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.have.property('taskId');",
+                  "    pm.expect(b.taskId, 'taskId').to.be.a('string').and.not.empty;",
+                  "    pm.expect(b).to.have.property('status');",
+                  "});",
+                  "// O `programada`, o `frequencia` e o `targetOutlet` NAO voltam nesta resposta:",
+                  "// CreatedTaskResponse tem so {taskId, status}. Eles se verificam no fio, com",
+                  "// mosquitto_sub -t 'pvd/+/task'. Ver a F1 do PI-0006-A24H.",
+                  "console.log('[F1] resposta: ' + pm.response.text());",
+                  "console.log('[F1] agendado para: ' + pm.collectionVariables.get('F1_EXECUTION_AT'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 8,\n  \"frequency\": 1,\n  \"executionAt\": \"{{F1_EXECUTION_AT}}\",\n  \"duration\": 0,\n  \"scheduled\": true,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks",
+              "host": ["{{EVENTS_BASE_URL}}"],
+              "path": ["api", "v1", "tasks"]
+            },
+            "description": "Verificacao F1 do PI-0006-A24H (atividade 113): prova que uma tarefa de Tomada Independente com `scheduled: true` desce pelo canal e e guardada pelo PVD ate o minuto marcado.\n\nPRE-REQUISITOS, nesta ordem:\n1. Ambiente do RB-0001 de pe, com o events-processing na 8082.\n2. Capacidade publicada para o device, porque o firmware nunca publica outlet-capacity:\n   docker exec mosquitto-mqtt-broker mosquitto_pub -h 127.0.0.1 -p 1883 -q 1 \\\n     -t \"a24h/{{EVENTS_TI_DEVICE_ID}}/outlet-capacity\" -m '{\"outletCount\":2}'\n3. Um assinante observando o fio ANTES de rodar:\n   docker exec mosquitto-mqtt-broker mosquitto_sub -h 127.0.0.1 -p 1883 -t 'pvd/+/task' -v\n\nATENCAO ao device: usa EVENTS_TI_DEVICE_ID, o UPS de bancada ao qual o PVD esta conectado. NAO usa o device-seed EVENTS_DEVICE_ID, que nenhum PVD escuta.\n\ntype 8 = Desligar Tomada Independente. frequency 1 = Uma vez."
           }
         }
       ]
