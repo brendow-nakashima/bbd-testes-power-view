@@ -1,0 +1,1935 @@
+{
+  "info": {
+    "_postman_id": "a24h-pvd-gateway-0001",
+    "name": "alerta24h-pvd-gateway",
+    "description": "Rotas do app mobile (PVM) que passam pelo gateway do PVD em modo REMOTE.\n\nCaminho: app -> gateway (443) -> tunel aberto pelo PVD (GATEWAY_IP:GATEWAY_PORT, 44311, identificado pelo deployId) -> Jersey do PVD em /sms/mobile/*.\n\nContrato copiado do app Android (origin/develop, comunicacao/Request*.java) e do PVD (web/rest/*Resource.java):\n- POST e PUT: parametros no corpo form-urlencoded (contrato @FormParam do PVD; o iOS envia assim, o Android envia na query string e tambem funciona no PVD);\n- GET e DELETE: parametros na query string (qtd e groupId sao @QueryParam; o DELETE de tarefa segue o Android);\n- headers: Content-Type x-www-form-urlencoded, X-API-KEY, deployid e token (Request.prepareConnectionDefault);\n- resposta JSON com responseStatus: S001 ok, S002 usuario/senha, S003 token invalido, S004 UPS trifasico, S005 comando invalido, S006 tempo de teste excedido, S007 authToken invalido, S008 tentativas excedidas, S009 aguardar 10 s, S010 token expirado, S012 usuario nao encontrado, S013 erro.\n\n=== Base URL ===\nValor da collection: http://powerview.alerta24-dev.com (em 28/09 so HTTP respondia; HTTPS expirava). O environment dev sobrescreve com https. Na rede corporativa (Zscaler) os dois falham: teste fora dela e use o que responder em GET /status.\nProd: https://gateway.alerta24h.com.br (o host do app Android).\n\n=== Pre-requisito: PVD conectado ao MESMO gateway ===\nEm nov/26 o PVD de dev abre o tunel na 44311 de powerview.alerta24-dev.com, que cai no gateway de homolog; o gateway de dev fica com 0 conexoes. Sem PVD conectado, o login devolve o MOCK do gateway (deployId postman-test) e as pastas [02] a [05] sao puladas.\n\n=== Variaveis ===\n- PVD_GATEWAY_LOGIN_USER / PVD_GATEWAY_LOGIN_PASSWORD: usuario mobile do PVD (padrao admin/1234).\n- PVD_GATEWAY_CODE: codigo de acesso do PVD, enviado pelo app no login (o PVD nao le; o gateway deve usar para achar o tunel).\n- PVD_GATEWAY_DEPLOY_ID: deployId do PVD; vazio, e preenchido pelo login.\n- PVD_GATEWAY_X_API_KEY: o app envia Constants.ALERTA24H_API_KEY. Vazio, o header nao e enviado. Nao versionar o valor.\n- PVD_GATEWAY_AUTH_TOKEN: authToken do QR code; vazio pula o login por QR code.\n- PVD_GATEWAY_ESCRITA_SENSIVEL: true libera [04] e [07].\n- PVD_GATEWAY_DISPARO_TIPO: comando do disparo real em [04] (padrao 4, cancelar teste).\n\nEfeito colateral do login: o PVD gera token novo para o usuario. Se o app estiver logado com o mesmo usuario, confira se a sessao dele continua.\n\nRodar: bash ./bin/run-tests.sh dev pvd-gateway",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Headers opcionais: nao envia X-API-KEY nem deployid vazios",
+          "['X-API-KEY', 'deployid'].forEach(function (h) {",
+          "    var hdr = pm.request.headers.get(h);",
+          "    if (hdr !== undefined && pm.variables.replaceIn(hdr) === '') { pm.request.headers.remove(h); }",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "PVD_GATEWAY_BASE_URL",
+      "value": "http://powerview.alerta24-dev.com"
+    },
+    {
+      "key": "PVD_GATEWAY_LOGIN_USER",
+      "value": "admin"
+    },
+    {
+      "key": "PVD_GATEWAY_LOGIN_PASSWORD",
+      "value": "1234"
+    },
+    {
+      "key": "PVD_GATEWAY_CODE",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_DEPLOY_ID",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_IDDEVICE",
+      "value": "postman"
+    },
+    {
+      "key": "PVD_GATEWAY_X_API_KEY",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_AUTH_TOKEN",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_ESCRITA_SENSIVEL",
+      "value": "false"
+    },
+    {
+      "key": "PVD_GATEWAY_DISPARO_TIPO",
+      "value": "4"
+    },
+    {
+      "key": "PVD_GATEWAY_GROUP_ID",
+      "value": "GROUP-01"
+    },
+    {
+      "key": "PVD_GATEWAY_TOKEN",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_REFRESH_TOKEN",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_MOCK",
+      "value": "false"
+    },
+    {
+      "key": "PVD_GATEWAY_NOTIFICACAO_ID",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_TAREFA_DATA",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_TAREFA_DATA_EDITADA",
+      "value": ""
+    },
+    {
+      "key": "PVD_GATEWAY_TAREFA_ID",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "[00] Saúde",
+      "description": "Status do gateway. Nao depende de PVD conectado.",
+      "item": [
+        {
+          "name": "Status → conexões ativas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "var b = pm.response.json();",
+                  "",
+                  "pm.test('connections é array de strings', function () {",
+                  "    pm.expect(b.connections).to.be.an('array');",
+                  "    b.connections.forEach(function (c) { pm.expect(c).to.be.a('string'); });",
+                  "});",
+                  "",
+                  "pm.test('total === connections.length', function () {",
+                  "    pm.expect(b.total).to.eql(b.connections.length);",
+                  "});",
+                  "",
+                  "console.log('Gateway: ' + b.total + ' PVD(s) conectado(s): ' + JSON.stringify(b.connections));",
+                  "",
+                  "var deployId = pm.variables.get('PVD_GATEWAY_DEPLOY_ID');",
+                  "if (deployId) {",
+                  "    pm.test('PVD ' + deployId + ' está conectado', function () {",
+                  "        pm.expect(b.connections).to.include(deployId);",
+                  "    });",
+                  "} else {",
+                  "    pm.test.skip('PVD conectado (PVD_GATEWAY_DEPLOY_ID vazio)', function () {});",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/status",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "status"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[01] Sessão",
+      "description": "Login pelo gateway, como o app faz em modo REMOTE (RequestLogin.java): POST com os parametros na query string. Grava PVD_GATEWAY_TOKEN, PVD_GATEWAY_REFRESH_TOKEN e, se vazio, PVD_GATEWAY_DEPLOY_ID. Se a resposta for o MOCK do gateway (deployId postman-test), marca PVD_GATEWAY_MOCK=true e as pastas seguintes sao puladas.",
+      "item": [
+        {
+          "name": "Login (usuário e senha do PVD)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('PVD_GATEWAY_MOCK', 'false');",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('responseStatus S001 e deployId presentes', function () {",
+                  "    pm.expect(b.responseStatus).to.eql('S001');",
+                  "    pm.expect(b.deployId).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "var mock = b.deployId === 'postman-test';",
+                  "if (mock) {",
+                  "    pm.collectionVariables.set('PVD_GATEWAY_MOCK', 'true');",
+                  "    console.log('Login respondido pelo MOCK do gateway (deployId postman-test). Preencha PVD_GATEWAY_CODE ou PVD_GATEWAY_DEPLOY_ID de um PVD conectado.');",
+                  "}",
+                  "console.log('Login: status=' + b.responseStatus + ' deployId=' + b.deployId + ' deployName=' + b.deployName + ' perfil=' + b.perfil);",
+                  "",
+                  "if (b.token) { pm.collectionVariables.set('PVD_GATEWAY_TOKEN', b.token); }",
+                  "if (b.refreshToken) { pm.collectionVariables.set('PVD_GATEWAY_REFRESH_TOKEN', b.refreshToken); }",
+                  "",
+                  "var deployId = pm.variables.get('PVD_GATEWAY_DEPLOY_ID');",
+                  "if (deployId) {",
+                  "    pm.test('Login respondido pelo PVD ' + deployId, function () {",
+                  "        pm.expect(b.deployId).to.eql(deployId);",
+                  "    });",
+                  "} else if (b.deployId && !mock) {",
+                  "    pm.collectionVariables.set('PVD_GATEWAY_DEPLOY_ID', b.deployId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/login/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "login",
+                ""
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{PVD_GATEWAY_LOGIN_USER}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{PVD_GATEWAY_LOGIN_PASSWORD}}",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "{{PVD_GATEWAY_CODE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "iddevice",
+                  "value": "{{PVD_GATEWAY_IDDEVICE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "sodevice",
+                  "value": "android",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: LoginMobileResource.postLogin. 200 S001 ok, 401 S002 senha invalida, 429 S008/S009 tentativas excedidas. O parametro code nao e lido pelo PVD; pelo nome, deve ser o que o gateway usa para achar o tunel (hipotese)."
+          }
+        },
+        {
+          "name": "Login por QR code",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('PVD_GATEWAY_AUTH_TOKEN')) {",
+                  "    console.log('Pulado: PVD_GATEWAY_AUTH_TOKEN vazio (authToken do QR code exibido no PVD).');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "console.log('QR code: status=' + b.responseStatus + ' deployId=' + b.deployId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/login/qrcode",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "login",
+                "qrcode"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "authToken",
+                  "value": "{{PVD_GATEWAY_AUTH_TOKEN}}",
+                  "type": "text"
+                },
+                {
+                  "key": "iddevice",
+                  "value": "{{PVD_GATEWAY_IDDEVICE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "sodevice",
+                  "value": "android",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: LoginMobileResource.qrLogin. S007 = authToken invalido. Nao grava token, para nao trocar a sessao aberta pelo login com senha."
+          }
+        },
+        {
+          "name": "Atualiza token (refreshToken)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('PVD_GATEWAY_REFRESH_TOKEN') || pm.variables.get('PVD_GATEWAY_MOCK') === 'true') {",
+                  "    console.log('Pulado: sem refreshToken de um PVD real.');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "pm.test('token e refreshToken novos', function () {",
+                  "    pm.expect(b.token).to.be.a('string').and.not.empty;",
+                  "    pm.expect(b.refreshToken).to.be.a('string').and.not.empty;",
+                  "});",
+                  "if (b.responseStatus === 'S001') {",
+                  "    pm.collectionVariables.set('PVD_GATEWAY_TOKEN', b.token);",
+                  "    pm.collectionVariables.set('PVD_GATEWAY_REFRESH_TOKEN', b.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/login/atualiza",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "login",
+                "atualiza"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "refreshToken",
+                  "value": "{{PVD_GATEWAY_REFRESH_TOKEN}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: LoginMobileResource.postAtualizaToken. Gera token e refreshToken novos; S012 = refreshToken nao encontrado."
+          }
+        }
+      ]
+    },
+    {
+      "name": "[02] Leitura",
+      "description": "Rotas de leitura que o app chama pelo gateway, com os headers token e deployid (Request.prepareConnectionDefault). Sem efeito no nobreak.",
+      "item": [
+        {
+          "name": "Medidores",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "pm.test('medidores e estados sao arrays', function () {",
+                  "    pm.expect(b.medidores).to.be.an('array');",
+                  "    pm.expect(b.estados).to.be.an('array');",
+                  "});",
+                  "pm.test('deployId da resposta = PVD do tunel', function () {",
+                  "    pm.expect(b.deployId).to.eql(pm.variables.get('PVD_GATEWAY_DEPLOY_ID'));",
+                  "});",
+                  "console.log('Medidores: tipoUPS=' + b.tipoUPS + ' medidores=' + (b.medidores || []).length + ' deployName=' + b.deployName);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/medidores/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "medidores",
+                ""
+              ]
+            },
+            "description": "PVD: MedidoresMobileResource.getMedidores (app: RequestUPS)."
+          }
+        },
+        {
+          "name": "Tarefas (agenda)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "pm.test('tarefas e array', function () { pm.expect(b.tarefas).to.be.an('array'); });",
+                  "console.log('Tarefas: ' + (b.tarefas || []).length + ' na agenda');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas",
+                ""
+              ]
+            },
+            "description": "PVD: TarefasMobileResource.getTarefas (app: RequestListaAgendamentos)."
+          }
+        },
+        {
+          "name": "Notificações",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('notificacoes e array', function () { pm.expect(b.notificacoes).to.be.an('array'); });",
+                  "var lista = b.notificacoes || [];",
+                  "console.log('Notificacoes: ' + lista.length);",
+                  "if (lista.length && lista[0].id !== undefined) { pm.collectionVariables.set('PVD_GATEWAY_NOTIFICACAO_ID', String(lista[0].id)); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/beannotificacao/?qtd=10",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "beannotificacao",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "qtd",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "PVD: NotificacaoPushResource.getBeanNotificacao (app: RequestNotificacoes). Nao devolve responseStatus. Grava o id da primeira em PVD_GATEWAY_NOTIFICACAO_ID."
+          }
+        },
+        {
+          "name": "Tomada independente — capacidade",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001 ou S004', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\",\"S004\"]);",
+                  "});",
+                  "pm.test('outletFeatureSupported e outletCount presentes', function () {",
+                  "    pm.expect(b.outletFeatureSupported).to.be.a('boolean');",
+                  "    pm.expect(b.outletCount).to.be.a('number');",
+                  "});",
+                  "console.log('Outlets: suportado=' + b.outletFeatureSupported + ' qtd=' + b.outletCount + ' grupos=' + JSON.stringify(b.groups));",
+                  "if (b.groups && b.groups.length) { pm.collectionVariables.set('PVD_GATEWAY_GROUP_ID', b.groups[0]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/outlets/capacidade",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "outlets",
+                "capacidade"
+              ]
+            },
+            "description": "PVD: OutletsMobileResource.getCapacidade. Nenhum app chama esta rota ainda (feature SPD-214)."
+          }
+        },
+        {
+          "name": "Tomada independente — estado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001 ou S004 ou S005', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\",\"S004\",\"S005\"]);",
+                  "});",
+                  "if (b.responseStatus === 'S001') {",
+                  "    pm.test('state ON, OFF ou UNKNOWN', function () { pm.expect(b.state).to.be.oneOf(['ON', 'OFF', 'UNKNOWN']); });",
+                  "}",
+                  "console.log('Outlet ' + b.groupId + ': state=' + b.state + ' stale=' + b.stale + ' lastUpdate=' + b.lastUpdate);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/outlets/estado?groupId={{PVD_GATEWAY_GROUP_ID}}",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "outlets",
+                "estado"
+              ],
+              "query": [
+                {
+                  "key": "groupId",
+                  "value": "{{PVD_GATEWAY_GROUP_ID}}"
+                }
+              ]
+            },
+            "description": "PVD: OutletsMobileResource.getEstado. S005 quando o UPS nao tem o grupo. Ver bug conhecido de firmware: leitura da tomada sempre ligada=false."
+          }
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.variables.get('PVD_GATEWAY_TOKEN')) {",
+              "    console.log('Pulado: sem PVD_GATEWAY_TOKEN (login pelo gateway nao rodou ou falhou).');",
+              "    pm.execution.skipRequest();",
+              "} else if (pm.variables.get('PVD_GATEWAY_MOCK') === 'true') {",
+              "    console.log('Pulado: o login veio do MOCK do gateway, nao ha PVD real do outro lado.');",
+              "    pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "[03] Comando sem efeito",
+      "description": "Prova o caminho de escrita (POST com token ate o PVD) sem tocar no nobreak: tipoEvento 9 (cancelar shutdown/restore) e recusado pelo PVD antes de qualquer comando.",
+      "item": [
+        {
+          "name": "Disparo tipoEvento 9 → S005 (recusado)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S005 (cancelar shutdown/restore nao suportado)', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S005\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/disparo",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "disparo"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "tipoEvento",
+                  "value": "9",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: DisparoAcaoMobileResource.postDisparo, retorno antecipado para DISPARO_CANCELAR_SHUTDOWN_RESTORE. Em UPS trifasico o retorno e S004."
+          }
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.variables.get('PVD_GATEWAY_TOKEN')) {",
+              "    console.log('Pulado: sem PVD_GATEWAY_TOKEN (login pelo gateway nao rodou ou falhou).');",
+              "    pm.execution.skipRequest();",
+              "} else if (pm.variables.get('PVD_GATEWAY_MOCK') === 'true') {",
+              "    console.log('Pulado: o login veio do MOCK do gateway, nao ha PVD real do outro lado.');",
+              "    pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "[04] Escrita sensível (opt-in)",
+      "description": "Altera o PVD de verdade. So roda com PVD_GATEWAY_ESCRITA_SENSIVEL=true.\n\nAgenda: cria uma tarefa de teste de bateria 10 s (tipoEvento 1, uma vez) daqui a 1 ano, edita para 1 ano e 1 dia, e remove. Se a remocao falhar, apague a tarefa no PVD. A agenda do PVD e sincronizada com a nuvem (POST /api/produtos/{p}/tarefas no adapter).\n\nNotificacao: confirma a primeira notificacao lida em [02].\n\nDisparo: envia PVD_GATEWAY_DISPARO_TIPO ao nobreak (padrao 4, cancelar teste). Os codigos estao em beans/Util.java: 1 teste 10 s, 2 teste por tempo, 3 teste ate bateria baixa, 4 cancelar teste, 5 beep on/off, 6 shutdown do SO, 7 shutdown SO + UPS, 8 ligar UPS, 10/11/12 ligar/desligar/reiniciar saida controlavel (exigem groupId).",
+      "item": [
+        {
+          "name": "Tarefas — criar",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function fmt(d) {",
+                  "    function p(n) { return (n < 10 ? '0' : '') + n; }",
+                  "    return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());",
+                  "}",
+                  "var d = new Date();",
+                  "d.setFullYear(d.getFullYear() + 1);",
+                  "d.setSeconds(0, 0);",
+                  "pm.collectionVariables.set('PVD_GATEWAY_TAREFA_DATA', fmt(d));",
+                  "d.setDate(d.getDate() + 1);",
+                  "pm.collectionVariables.set('PVD_GATEWAY_TAREFA_DATA_EDITADA', fmt(d));",
+                  "pm.collectionVariables.set('PVD_GATEWAY_TAREFA_ID', '');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "console.log('Tarefa criada para ' + pm.variables.get('PVD_GATEWAY_TAREFA_DATA') + ' (o POST nao devolve o id).');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "data",
+                  "value": "{{PVD_GATEWAY_TAREFA_DATA}}",
+                  "type": "text"
+                },
+                {
+                  "key": "frequencia",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "tipoEvento",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "duracao",
+                  "value": "0",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: TarefasMobileResource.postTarefa (app: RequestEnviarAgendamento). Data no formato dd/MM/yyyy HH:mm, precisa ser futura."
+          }
+        },
+        {
+          "name": "Tarefas — localizar a criada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "var alvo = (b.tarefas || []).filter(function (t) { return t.data === pm.variables.get('PVD_GATEWAY_TAREFA_DATA') && t.tipoEvento === 1; })[0];",
+                  "pm.test('tarefa criada esta na agenda', function () { pm.expect(alvo).to.be.an('object'); });",
+                  "if (alvo) { pm.collectionVariables.set('PVD_GATEWAY_TAREFA_ID', alvo.id); console.log('Tarefa id=' + alvo.id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Tarefas — editar",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('PVD_GATEWAY_TAREFA_ID')) { console.log('Pulado: tarefa nao localizada.'); pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "pm.test('objetoId da tarefa editada', function () { pm.expect(b.objetoId).to.be.a('string').and.not.empty; });",
+                  "if (b.objetoId) { pm.collectionVariables.set('PVD_GATEWAY_TAREFA_ID', b.objetoId); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "id",
+                  "value": "{{PVD_GATEWAY_TAREFA_ID}}",
+                  "type": "text"
+                },
+                {
+                  "key": "data",
+                  "value": "{{PVD_GATEWAY_TAREFA_DATA_EDITADA}}",
+                  "type": "text"
+                },
+                {
+                  "key": "frequencia",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "tipoEvento",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "duracao",
+                  "value": "0",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: TarefasMobileResource.putTarefa (app: RequestEditarAgendamento). Remove a tarefa e cria outra; devolve o id novo em objetoId."
+          }
+        },
+        {
+          "name": "Tarefas — remover",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('PVD_GATEWAY_TAREFA_ID')) { console.log('Pulado: tarefa nao localizada.'); pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas/?id={{PVD_GATEWAY_TAREFA_ID}}",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "id",
+                  "value": "{{PVD_GATEWAY_TAREFA_ID}}"
+                }
+              ]
+            },
+            "description": "PVD: TarefasMobileResource.deleteTarefa (app: RequestDeleteAgendamento)."
+          }
+        },
+        {
+          "name": "Tarefas — conferir remoção",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "var id = pm.variables.get('PVD_GATEWAY_TAREFA_ID');",
+                  "var ainda = (b.tarefas || []).filter(function (t) { return t.id === id && !t.removida; });",
+                  "pm.test('tarefa de teste nao esta mais na agenda', function () { pm.expect(ainda).to.have.lengthOf(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Notificações — confirmar",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('PVD_GATEWAY_NOTIFICACAO_ID')) { console.log('Pulado: nenhuma notificacao lida em [02].'); pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/notificacoes/confirmar",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "notificacoes",
+                "confirmar"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "ids",
+                  "value": "{{PVD_GATEWAY_NOTIFICACAO_ID}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: ConfirmarNotificacaoResource (app: RequestConfirmarNotificacoes). Confirma so o primeiro id da lista."
+          }
+        },
+        {
+          "name": "Disparo — comando real",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S001', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S001\"]);",
+                  "});",
+                  "console.log('Disparo tipoEvento=' + pm.variables.get('PVD_GATEWAY_DISPARO_TIPO') + ': ' + b.responseStatus);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/disparo",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "disparo"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "tipoEvento",
+                  "value": "{{PVD_GATEWAY_DISPARO_TIPO}}",
+                  "type": "text"
+                },
+                {
+                  "key": "groupId",
+                  "value": "{{PVD_GATEWAY_GROUP_ID}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "PVD: DisparoAcaoMobileResource.postDisparo (app: RequestEnviarComando). Envia comando ao nobreak."
+          }
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.variables.get('PVD_GATEWAY_ESCRITA_SENSIVEL') !== 'true') {",
+              "    console.log('Pulado: escrita sensivel desligada (PVD_GATEWAY_ESCRITA_SENSIVEL != true).');",
+              "    pm.execution.skipRequest();",
+              "} else {",
+              "    if (!pm.variables.get('PVD_GATEWAY_TOKEN')) {",
+              "        console.log('Pulado: sem PVD_GATEWAY_TOKEN (login pelo gateway nao rodou ou falhou).');",
+              "        pm.execution.skipRequest();",
+              "    } else if (pm.variables.get('PVD_GATEWAY_MOCK') === 'true') {",
+              "        console.log('Pulado: o login veio do MOCK do gateway, nao ha PVD real do outro lado.');",
+              "        pm.execution.skipRequest();",
+              "    }",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "[05] Erros",
+      "description": "Respostas de erro do PVD atraves do gateway. O login com senha errada fica por ultimo porque conta tentativa (S008/S009 bloqueiam por um tempo).",
+      "item": [
+        {
+          "name": "Medidores com token inválido → S003",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S003 ou S010 (token invalido ou expirado)', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S003\",\"S010\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "bbd-tests-token-invalido"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/medidores/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "medidores",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Tarefas com token inválido → S003",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S003 ou S010 (token invalido ou expirado)', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S003\",\"S010\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "bbd-tests-token-invalido"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Tarefa com data passada → S005",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S005 (data passada recusada antes de gravar)', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S005\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/tarefas",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "tarefas"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "data",
+                  "value": "01/01/2020 00:00",
+                  "type": "text"
+                },
+                {
+                  "key": "frequencia",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "tipoEvento",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "duracao",
+                  "value": "0",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "TarefasMobileResource.cadastrarTarefa recusa data nao futura (isDataAgendamentoFutura) sem gravar nada."
+          }
+        },
+        {
+          "name": "Atualiza token com refreshToken inválido → S012",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S012 (usuario nao encontrado)', function () {",
+                  "    pm.expect(b.responseStatus).to.be.oneOf([\"S012\"]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/login/atualiza",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "login",
+                "atualiza"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "refreshToken",
+                  "value": "bbd-tests-refresh-invalido",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login com senha errada → 401 S002",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', function () { pm.response.to.have.status(401); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('responseStatus S002', function () { pm.expect(b.responseStatus).to.eql('S002'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/login/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "login",
+                ""
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{PVD_GATEWAY_LOGIN_USER}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "bbd-tests-senha-errada",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "{{PVD_GATEWAY_CODE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "iddevice",
+                  "value": "{{PVD_GATEWAY_IDDEVICE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "sodevice",
+                  "value": "android",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.variables.get('PVD_GATEWAY_TOKEN')) {",
+              "    console.log('Pulado: sem PVD_GATEWAY_TOKEN (login pelo gateway nao rodou ou falhou).');",
+              "    pm.execution.skipRequest();",
+              "} else if (pm.variables.get('PVD_GATEWAY_MOCK') === 'true') {",
+              "    console.log('Pulado: o login veio do MOCK do gateway, nao ha PVD real do outro lado.');",
+              "    pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "[06] Rotas só do gateway",
+      "description": "O app chama /sms/mobile/A24h/login/ (Constants.ROUTE_URL_A24H_LOGIN), que nao existe no PVD. Presume-se que o gateway responda. O contrato e desconhecido (repositorio do gateway nao clonado): os testes so registram a resposta e falham apenas em 5xx.",
+      "item": [
+        {
+          "name": "A24h login (POST)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Sem erro 5xx', function () { pm.expect(pm.response.code).to.be.below(500); });",
+                  "console.log('A24h login POST: HTTP ' + pm.response.code + ' ' + pm.response.text().substring(0, 300));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/A24h/login/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "A24h",
+                "login",
+                ""
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{PVD_GATEWAY_LOGIN_USER}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{PVD_GATEWAY_LOGIN_PASSWORD}}",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "{{PVD_GATEWAY_CODE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "iddevice",
+                  "value": "{{PVD_GATEWAY_IDDEVICE}}",
+                  "type": "text"
+                },
+                {
+                  "key": "sodevice",
+                  "value": "android",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "A24h login (GET)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Sem erro 5xx', function () { pm.expect(pm.response.code).to.be.below(500); });",
+                  "console.log('A24h login GET: HTTP ' + pm.response.code + ' ' + pm.response.text().substring(0, 300));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/A24h/login/?username={{PVD_GATEWAY_LOGIN_USER}}&password={{PVD_GATEWAY_LOGIN_PASSWORD}}&code={{PVD_GATEWAY_CODE}}&iddevice={{PVD_GATEWAY_IDDEVICE}}&sodevice=android",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "A24h",
+                "login",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "username",
+                  "value": "{{PVD_GATEWAY_LOGIN_USER}}"
+                },
+                {
+                  "key": "password",
+                  "value": "{{PVD_GATEWAY_LOGIN_PASSWORD}}"
+                },
+                {
+                  "key": "code",
+                  "value": "{{PVD_GATEWAY_CODE}}"
+                },
+                {
+                  "key": "iddevice",
+                  "value": "{{PVD_GATEWAY_IDDEVICE}}"
+                },
+                {
+                  "key": "sodevice",
+                  "value": "android"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[07] Logout (opt-in)",
+      "description": "DELETE /sms/mobile/login/ apaga o token do usuario no PVD (deleteTokenUsuarioMobile). Se o app estiver logado com o mesmo usuario, a sessao dele cai. So roda com PVD_GATEWAY_ESCRITA_SENSIVEL=true.",
+      "item": [
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) { console.log('Resposta nao e JSON: ' + pm.response.text().substring(0, 200)); }",
+                  "pm.test('token deixou de valer', function () { pm.expect(b.responseStatus).to.not.eql('S001'); });",
+                  "console.log('Logout: ' + b.responseStatus);",
+                  "pm.collectionVariables.set('PVD_GATEWAY_TOKEN', '');",
+                  "pm.collectionVariables.set('PVD_GATEWAY_REFRESH_TOKEN', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{PVD_GATEWAY_X_API_KEY}}"
+              },
+              {
+                "key": "deployid",
+                "value": "{{PVD_GATEWAY_DEPLOY_ID}}"
+              },
+              {
+                "key": "token",
+                "value": "{{PVD_GATEWAY_TOKEN}}"
+              },
+              {
+                "key": "username",
+                "value": "{{PVD_GATEWAY_LOGIN_USER}}"
+              }
+            ],
+            "url": {
+              "raw": "{{PVD_GATEWAY_BASE_URL}}/sms/mobile/login/",
+              "host": [
+                "{{PVD_GATEWAY_BASE_URL}}"
+              ],
+              "path": [
+                "sms",
+                "mobile",
+                "login",
+                ""
+              ]
+            },
+            "description": "PVD: LoginMobileResource.deleteLogin (app: RequestLogout). username e token vao em header."
+          }
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.variables.get('PVD_GATEWAY_ESCRITA_SENSIVEL') !== 'true') {",
+              "    console.log('Pulado: escrita sensivel desligada (PVD_GATEWAY_ESCRITA_SENSIVEL != true).');",
+              "    pm.execution.skipRequest();",
+              "} else {",
+              "    if (!pm.variables.get('PVD_GATEWAY_TOKEN')) {",
+              "        console.log('Pulado: sem PVD_GATEWAY_TOKEN (login pelo gateway nao rodou ou falhou).');",
+              "        pm.execution.skipRequest();",
+              "    } else if (pm.variables.get('PVD_GATEWAY_MOCK') === 'true') {",
+              "        console.log('Pulado: o login veio do MOCK do gateway, nao ha PVD real do outro lado.');",
+              "        pm.execution.skipRequest();",
+              "    }",
+              "}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

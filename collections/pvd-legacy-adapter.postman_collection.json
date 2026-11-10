@@ -1,0 +1,755 @@
+{
+  "info": {
+    "_postman_id": "a24h-pvd-legacy-adapter-0001",
+    "name": "alerta24h-pvd-legacy-adapter",
+    "description": "Testes do pvd-legacy-adapter-service do Alerta24h (sms-legrand-a24h-pvd-legacy-adapter-service): a ponte entre o PVD Desktop legado (REST/XML) e o Alerta24h (MQTT/JSON).\n\nContrato conferido em origin/develop do adapter em 2026-11-06 (AlertaController, VersionController, AuthService, XmlService, AdapterExceptionHandler).\n\n=== Duas URLs base ===\n- PVD_ADAPTER_BASE_URL: host direto do adapter. Usado em [00] (health e Swagger), que NAO passam pelo www.\n- PVD_REST_BASE_URL: o caminho que o PVD usa (ALERTA_HOST). Em dev e https://www.alerta24-dev.com, onde o Ingress -www-mtls do adapter (kong-mtls, commit 88490de de 2026-10-28) atende so /api, /termos-de-uso e /politica-de-privacidade. Em local, as duas apontam para o adapter.\n\n=== Fluxo (stateful, em ordem) ===\n[02] login -> token de sessao em memoria no adapter -> [03] lista produtos (IDs legados da sessao) e associa o produto de serial ALERT_TI_SERIAL (login do agente no alert-service) -> [04] a [07] usam a sessao associada.\nCredenciais: ALERT_USER_LOGIN / ALERT_USER_PASSWORD (conta dona do device de bancada). Sem elas, as pastas que dependem de sessao sao puladas.\n\n=== Efeitos colaterais no ambiente ===\n- [04] startup e keep-alive publicam no MQTT como o device associado.\n- [05] medidores e eventos vao com lista VAZIA: valida rota, sessao e parse sem gerar telemetria falsa nem alarme.\n- [06] POST de tarefas sobrescreve a agenda do device (sincronizarDoDevice) e [07] shutdown marca o device offline. Os dois so rodam com PVD_ADAPTER_ESCRITA_SENSIVEL = true; o POST devolve exatamente a agenda que o GET leu.\n\n=== Status de erro do adapter ===\nIllegalArgumentException -> 400 com <erro><code>400</code><message>...</message></erro> (token invalido, produto nao associado, XML invalido, login sem senha). 4xx do alert-service -> 401 sem corpo (credencial invalida).\n\n=== Rede corporativa ===\nNa rede com Zscaler, o handshake TLS com SNI www/admin-service/alert-service/pvd-legacy-adapter-service .alerta24-dev.com e derrubado (verificado 2026-11-06). Rodar contra dev fora dessa rede.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "PVD_TOKEN_USUARIO", "value": "", "type": "string" },
+    { "key": "PVD_PRODUTO_ID", "value": "", "type": "string" },
+    { "key": "PVD_TOKEN_PRODUTO", "value": "", "type": "string" },
+    { "key": "PVD_TAREFAS_XML", "value": "", "type": "string" },
+    { "key": "PVD_LOGIN_FORM", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "[00] Saúde",
+      "item": [
+        {
+          "name": "Health → UP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status === UP', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.have.property('status', 'UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_ADAPTER_BASE_URL}}/actuator/health",
+              "host": ["{{PVD_ADAPTER_BASE_URL}}"],
+              "path": ["actuator", "health"]
+            }
+          }
+        },
+        {
+          "name": "Swagger UI público",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 (swagger-ui acessível sem auth)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_ADAPTER_BASE_URL}}/swagger-ui/index.html",
+              "host": ["{{PVD_ADAPTER_BASE_URL}}"],
+              "path": ["swagger-ui", "index.html"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[01] Termos e versão (sem login)",
+      "description": "VersionController. lastversion consulta o admin-service (com fallback para a versão default configurada); termos e política são proxy do arquivo do admin-service (502 se o admin não devolver o arquivo).",
+      "item": [
+        {
+          "name": "Última versão dos termos (pt)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('JSON com termo.versao e politica.versao', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.have.nested.property('termo.versao').that.is.a('string').and.not.empty;",
+                  "    pm.expect(b).to.have.nested.property('politica.versao').that.is.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/lastversion/pt",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "lastversion", "pt"]
+            }
+          }
+        },
+        {
+          "name": "Termos de uso (proxy do admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 (502 = admin-service não devolveu o arquivo)', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Corpo não vazio', function () { pm.expect(pm.response.responseSize).to.be.above(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/termos-de-uso",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["termos-de-uso"]
+            }
+          }
+        },
+        {
+          "name": "Política de privacidade (proxy do admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 (502 = admin-service não devolveu o arquivo)', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Corpo não vazio', function () { pm.expect(pm.response.responseSize).to.be.above(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/politica-de-privacidade",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["politica-de-privacidade"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[02] Sessão — login",
+      "description": "POST /api/usuarios/token. O adapter loga o usuário no alert-service e devolve um token de sessão próprio (UUID, em memória). Dois formatos aceitos: XML puro e o form-urlencoded que o PowerView manda (commit a024283, 2026-11-05).",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.environment.get('ALERT_USER_LOGIN') || !pm.environment.get('ALERT_USER_PASSWORD')) {",
+              "    console.warn('[pvd-adapter] ALERT_USER_LOGIN/ALERT_USER_PASSWORD vazios: login pulado, e as pastas [03] a [07] também.');",
+              "    pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Login (XML)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var m = pm.response.text().match(/<response>\\s*<token>([^<]+)<\\/token>\\s*<\\/response>/);",
+                  "pm.test('<response><token> presente', function () { pm.expect(m, pm.response.text()).to.not.be.null; });",
+                  "if (m) { pm.collectionVariables.set('PVD_TOKEN_USUARIO', m[1]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<usuario><login>{{ALERT_USER_LOGIN}}</login><senha>{{ALERT_USER_PASSWORD}}</senha></usuario>"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/token",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "token"]
+            }
+          }
+        },
+        {
+          "name": "Login (form-urlencoded, formato do PowerView)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// O PowerView manda o XML como chave de formulário sem valor: %3Cusuario%3E...%3C%2Fusuario%3E=",
+                  "var xml = '<usuario><login>' + pm.environment.get('ALERT_USER_LOGIN') + '</login><senha>' + pm.environment.get('ALERT_USER_PASSWORD') + '</senha></usuario>';",
+                  "pm.collectionVariables.set('PVD_LOGIN_FORM', encodeURIComponent(xml) + '=');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('<response><token> presente', function () {",
+                  "    pm.expect(pm.response.text()).to.match(/<response>\\s*<token>[^<]+<\\/token>\\s*<\\/response>/);",
+                  "});",
+                  "pm.collectionVariables.set('PVD_LOGIN_FORM', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{{PVD_LOGIN_FORM}}"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/token",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "token"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[03] Produtos e associação",
+      "description": "listarProdutos monta IDs legados (1, 2, ...) por sessão a partir dos devices do usuário no alert-service. associar faz o login do agente com o serial do produto e grava o deviceId na sessão; só depois disso os endpoints do device funcionam.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('PVD_TOKEN_USUARIO')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "[Erro] Startup antes de associar → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('<erro> com \"Produto não associado\"', function () {",
+                  "    pm.expect(pm.response.text()).to.include('<code>400</code>').and.include('Produto n');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/software/startup/sem-produto",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "software", "startup", "sem-produto"]
+            }
+          }
+        },
+        {
+          "name": "Listar produtos e achar o device de bancada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.text();",
+                  "pm.test('Raiz <list>', function () { pm.expect(body).to.match(/^\\s*<list[\\s>\\/]/); });",
+                  "var serial = pm.environment.get('ALERT_TI_SERIAL');",
+                  "var produtos = body.match(/<produto>[\\s\\S]*?<\\/produto>/g) || [];",
+                  "var alvo = produtos.find(function (p) { return p.indexOf('<serial>' + serial + '</serial>') !== -1; });",
+                  "pm.test('Produto com serial ' + serial + ' na lista (' + produtos.length + ' produto(s))', function () {",
+                  "    pm.expect(alvo, 'A conta ALERT_USER_LOGIN não tem o device ' + serial).to.exist;",
+                  "});",
+                  "if (alvo) {",
+                  "    var id = alvo.match(/<produto>\\s*<id>([^<]+)<\\/id>/);",
+                  "    pm.test('Produto tem <id> legado', function () { pm.expect(id).to.not.be.null; });",
+                  "    if (id) { pm.collectionVariables.set('PVD_PRODUTO_ID', id[1]); }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/software/1/produtos",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "software", "1", "produtos"]
+            }
+          }
+        },
+        {
+          "name": "Associar o produto (login do agente)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('PVD_PRODUTO_ID')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var m = pm.response.text().match(/<software>\\s*<tokenProduto>([^<]+)<\\/tokenProduto>\\s*<\\/software>/);",
+                  "pm.test('<software><tokenProduto> (deviceId) presente', function () { pm.expect(m, pm.response.text()).to.not.be.null; });",
+                  "if (m) { pm.collectionVariables.set('PVD_TOKEN_PRODUTO', m[1]); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<software/>"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/produtos/{{PVD_PRODUTO_ID}}/associar",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "produtos", "{{PVD_PRODUTO_ID}}", "associar"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[04] Ciclo de vida do software",
+      "description": "startup e keep-alive publicam no MQTT (a24h/{deviceId}/startup e /keepalive) como o device associado. O PVD manda o keep-alive como PUT com corpo vazio.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('PVD_TOKEN_PRODUTO')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Startup → 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/software/startup/{{PVD_TOKEN_PRODUTO}}",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "software", "startup", "{{PVD_TOKEN_PRODUTO}}"]
+            }
+          }
+        },
+        {
+          "name": "Keep-alive → 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/software/keep-alive/{{PVD_TOKEN_PRODUTO}}",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "software", "keep-alive", "{{PVD_TOKEN_PRODUTO}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[05] Medidores e eventos",
+      "description": "Listas VAZIAS de propósito: validam rota, sessão associada e parse do XML sem publicar leitura falsa nem evento que vire alarme. O formato com dados é <list><medidor><valor/><data>dd/MM/yyyy HH:mm:ss</data><tipo><id/></tipo></medidor></list> e <list><log_evento><dataOcorrido/><evento><id/></evento></log_evento></list>.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('PVD_TOKEN_PRODUTO')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Medidores (lista vazia) → 202",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 202', function () { pm.response.to.have.status(202); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<list></list>"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/produtos/{{PVD_TOKEN_PRODUTO}}/medidores",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "produtos", "{{PVD_TOKEN_PRODUTO}}", "medidores"]
+            }
+          }
+        },
+        {
+          "name": "Eventos (lista vazia, PUT) → 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<list></list>"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/produtos/{{PVD_TOKEN_PRODUTO}}/eventos",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "produtos", "{{PVD_TOKEN_PRODUTO}}", "eventos"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[06] Tarefas",
+      "description": "GET lê a agenda do device. O POST sincroniza a agenda a partir do device (sobrescreve): só roda com PVD_ADAPTER_ESCRITA_SENSIVEL = true e devolve exatamente o XML que o GET leu.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('PVD_TOKEN_PRODUTO')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Baixar tarefas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var body = pm.response.text();",
+                  "pm.test('Raiz <list>', function () { pm.expect(body).to.match(/^\\s*<list[\\s>\\/]/); });",
+                  "var n = (body.match(/<tarefa>/g) || []).length;",
+                  "console.log('[pvd-adapter] agenda do device: ' + n + ' tarefa(s)');",
+                  "pm.collectionVariables.set('PVD_TAREFAS_XML', body);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/produtos/{{PVD_TOKEN_PRODUTO}}/tarefas",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "produtos", "{{PVD_TOKEN_PRODUTO}}", "tarefas"]
+            }
+          }
+        },
+        {
+          "name": "Enviar tarefas (devolve a mesma agenda) → 201 [opcional]",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('PVD_ADAPTER_ESCRITA_SENSIVEL') !== 'true' || !pm.collectionVariables.get('PVD_TAREFAS_XML')) {",
+                  "    console.log('[pvd-adapter] POST de tarefas pulado (PVD_ADAPTER_ESCRITA_SENSIVEL != true ou GET sem corpo).');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{{PVD_TAREFAS_XML}}"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/produtos/{{PVD_TOKEN_PRODUTO}}/tarefas",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "produtos", "{{PVD_TOKEN_PRODUTO}}", "tarefas"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[07] Encerramento",
+      "description": "DELETE shutdown publica a24h/{deviceId}/shutdown e o device aparece offline até o próximo startup/keep-alive. Só roda com PVD_ADAPTER_ESCRITA_SENSIVEL = true.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('PVD_TOKEN_PRODUTO') || pm.environment.get('PVD_ADAPTER_ESCRITA_SENSIVEL') !== 'true') {",
+              "    pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Shutdown → 200 [opcional]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/{{PVD_TOKEN_USUARIO}}/software/shutdown/{{PVD_TOKEN_PRODUTO}}",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "{{PVD_TOKEN_USUARIO}}", "software", "shutdown", "{{PVD_TOKEN_PRODUTO}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[08] Erros",
+      "description": "Casos negativos que não dependem de sessão válida.",
+      "item": [
+        {
+          "name": "[Erro] Login sem senha → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('<erro><code>400</code>', function () { pm.expect(pm.response.text()).to.include('<code>400</code>'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<usuario><login>bbd-tests-sem-senha</login><senha></senha></usuario>"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/token",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "token"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] Login de usuário inexistente → 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Login inexistente (e não a senha errada da conta real) para não contar tentativa contra ela.",
+                  "pm.variables.set('LOGIN_INEXISTENTE', 'bbd-tests-inexistente-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401 (4xx do alert-service vira 401 legado)', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<usuario><login>{{LOGIN_INEXISTENTE}}</login><senha>senha-qualquer</senha></usuario>"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/token",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "token"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] Token de usuário inválido → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('<erro> com \"Token de usuário inválido\"', function () {",
+                  "    pm.expect(pm.response.text()).to.include('<code>400</code>').and.include('Token de usu');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/00000000-0000-0000-0000-000000000000/software/1/produtos",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "00000000-0000-0000-0000-000000000000", "software", "1", "produtos"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] XML inválido no login → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('<erro><code>400</code>', function () { pm.expect(pm.response.text()).to.include('<code>400</code>'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/xml" }],
+            "body": {
+              "mode": "raw",
+              "raw": "<usuario><login>sem-fechamento"
+            },
+            "url": {
+              "raw": "{{PVD_REST_BASE_URL}}/api/usuarios/token",
+              "host": ["{{PVD_REST_BASE_URL}}"],
+              "path": ["api", "usuarios", "token"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

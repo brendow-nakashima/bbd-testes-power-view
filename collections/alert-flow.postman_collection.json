@@ -1,0 +1,256 @@
+{
+  "info": {
+    "_postman_id": "a24h-alert-flow-0001",
+    "name": "alerta24h-alert-flow",
+    "description": "Teste de INTEGRACAO e2e do fluxo de autenticacao de um usuario novo no Alerta24h local: cadastro -> validacao de serial no admin -> RabbitMQ -> notification -> e-mail no MailHog -> ativacao -> login (JWT).\n\nE STATEFUL (cria um usuario novo a cada execucao, com login/email/serial unicos por timestamp) e ASSINCRONO (espera o e-mail chegar no MailHog). Diferente da coleta smoke `alert-service` (read-only).\n\nPRE-REQUISITOS:\n- Stack local no ar: alert (8081), admin (8084), RabbitMQ, notification (8083), MailHog (8025).\n- Produto seedado no admin com code = ADMIN_PRODUCT_CODE (prefixo do serial). Ver RB-0009 Passo 0 / DD-0012.\n- notification com APP_MAIL_SENDER preenchido.\n\nValidado manualmente em 2026-06-11 (RB-0009).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-api-key", "type": "string" },
+      { "key": "value", "value": "{{ALERT_API_KEY}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// 1) x-api-key cifrado do alert (AES-128-ECB/PKCS7 + Base64), igual a coleta alert-service.",
+          "var raw = pm.environment.get('ALERT_API_KEY_RAW');",
+          "var secret = pm.environment.get('ALERT_API_KEY_SECRET');",
+          "if (raw && secret) {",
+          "    var key = CryptoJS.enc.Utf8.parse(secret);",
+          "    var enc = CryptoJS.AES.encrypt(raw, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 });",
+          "    pm.collectionVariables.set('ALERT_API_KEY', enc.toString());",
+          "}",
+          "// 2) dados unicos por execucao (gerados UMA vez).",
+          "if (!pm.collectionVariables.get('FLOW_LOGIN')) {",
+          "    var seven = ('0000000' + (Date.now() % 10000000)).slice(-7);",
+          "    var prefix = (pm.environment.get('ADMIN_PRODUCT_CODE') || '10000').toString();",
+          "    pm.collectionVariables.set('FLOW_LOGIN', 'e2e' + seven);",
+          "    pm.collectionVariables.set('FLOW_EMAIL', 'e2e' + seven + '@example.com');",
+          "    pm.collectionVariables.set('FLOW_PASSWORD', 'Senha@123');",
+          "    pm.collectionVariables.set('FLOW_SERIAL', (prefix + seven).substring(0, 12));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "ALERT_API_KEY", "value": "", "type": "string" },
+    { "key": "FLOW_LOGIN", "value": "", "type": "string" },
+    { "key": "FLOW_EMAIL", "value": "", "type": "string" },
+    { "key": "FLOW_PASSWORD", "value": "", "type": "string" },
+    { "key": "FLOW_SERIAL", "value": "", "type": "string" },
+    { "key": "FLOW_ACTIVATION_URL", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "[00] Pré-condição — produto no admin",
+      "item": [
+        {
+          "name": "Produto com code existe no admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Produto seedado no admin (Passo 0 do RB-0009)', function () {",
+                  "    pm.expect(pm.response.code, 'O code ' + pm.environment.get('ADMIN_PRODUCT_CODE') + ' nao existe no admin. Rode o Passo 0 do RB-0009 (seed de product_model + product).').to.eql(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                { "key": "key", "value": "x-api-key", "type": "string" },
+                { "key": "value", "value": "{{ADMIN_API_KEY}}", "type": "string" },
+                { "key": "in", "value": "header", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ADMIN_BASE_URL}}/api/v1/products/code/{{ADMIN_PRODUCT_CODE}}",
+              "host": ["{{ADMIN_BASE_URL}}"],
+              "path": ["api", "v1", "products", "code", "{{ADMIN_PRODUCT_CODE}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[01] Cadastro",
+      "item": [
+        {
+          "name": "POST /api/v1/users (novo usuário)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 (usuário criado, inativo)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "console.log('Cadastrado login=' + pm.collectionVariables.get('FLOW_LOGIN') + ' serial=' + pm.collectionVariables.get('FLOW_SERIAL'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Teste\",\n  \"surname\": \"E2E\",\n  \"email\": \"{{FLOW_EMAIL}}\",\n  \"emailConfirmation\": \"{{FLOW_EMAIL}}\",\n  \"password\": \"{{FLOW_PASSWORD}}\",\n  \"login\": \"{{FLOW_LOGIN}}\",\n  \"typeOfUser\": \"Residencial\",\n  \"phoneNumber\": \"11999990099\",\n  \"enterpriseName\": \"Empresa Teste\",\n  \"serialNumber\": \"{{FLOW_SERIAL}}\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/users",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "users"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[02] E-mail de ativação (MailHog)",
+      "item": [
+        {
+          "name": "Buscar e-mail e extrair token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Espera o pipeline assincrono (alert -> RabbitMQ -> notification -> MailHog).",
+                  "var until = Date.now() + 2500;",
+                  "while (Date.now() < until) { /* busy-wait curto */ }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 (MailHog respondeu)', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Há e-mail para o destinatário', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b.total, 'nenhum e-mail para ' + pm.collectionVariables.get('FLOW_EMAIL')).to.be.above(0);",
+                  "});",
+                  "pm.test('Assunto e remetente corretos', function () {",
+                  "    var h = pm.response.json().items[0].Content.Headers;",
+                  "    var subj = (h.Subject || [''])[0];",
+                  "    var from = (h.From || [''])[0];",
+                  "    pm.expect(subj).to.include('Ative sua conta');",
+                  "    pm.expect(from).to.include('naoresponda@alerta24h.local');",
+                  "});",
+                  "pm.test('Extrai o activation_url', function () {",
+                  "    var t = pm.response.text().replace(/=(\\r\\n|\\n|\\\\r\\\\n|\\\\n)/g, '');",
+                  "    var m = t.match(/http:\\/\\/[^\\s\"'\\\\]+\\/api\\/v1\\/users\\/activate\\/[0-9a-fA-F-]{36}/);",
+                  "    pm.expect(m, 'link de ativacao nao encontrado no corpo').to.not.be.null;",
+                  "    pm.collectionVariables.set('FLOW_ACTIVATION_URL', m[0]);",
+                  "    console.log('activation_url = ' + m[0]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{MAILHOG_BASE_URL}}/api/v2/search?kind=to&query={{FLOW_EMAIL}}",
+              "host": ["{{MAILHOG_BASE_URL}}"],
+              "path": ["api", "v2", "search"],
+              "query": [
+                { "key": "kind", "value": "to" },
+                { "key": "query", "value": "{{FLOW_EMAIL}}" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[03] Ativação",
+      "item": [
+        {
+          "name": "GET /activate/{token}",
+          "protocolProfileBehavior": { "followRedirects": false },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Ativação não retorna erro (2xx/3xx)', function () {",
+                  "    pm.expect(pm.response.code).to.be.within(200, 399);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{FLOW_ACTIVATION_URL}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "[04] Login",
+      "item": [
+        {
+          "name": "POST /auth/login (usuário ativo)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Retorna um JWT', function () {",
+                  "    pm.expect(pm.response.text(), 'resposta sem JWT').to.match(/eyJ[A-Za-z0-9_-]+\\./);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{FLOW_LOGIN}}\",\n  \"password\": \"{{FLOW_PASSWORD}}\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

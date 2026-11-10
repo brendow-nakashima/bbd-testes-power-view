@@ -1,0 +1,144 @@
+{
+  "info": {
+    "_postman_id": "a24h-admin-service-0001",
+    "name": "alerta24h-admin-service",
+    "description": "Smoke tests do serviço admin-service do Alerta24h (context-path /admin).\n\nAuth (DIFERENTE do alert/events):\n- O admin protege tudo atras do form login (OAuth2/OIDC + sessao); rotas de UI/actuator redirecionam para /admin/login (302).\n- As rotas REST sob `/admin/api/**` sao permitAll quanto a sessao, porem o ApiKeyFilter exige o header `x-api-key` em TEXTO PURO (UUID `ADMIN_API_KEY` = 7fa3b52f-...), NAO o esquema AES cifrado do alert/events.\n\nFoco: o endpoint `GET /admin/api/v1/products/code/{code}` e a fonte da validacao de serial usada pelo alert no cadastro (os 5 primeiros digitos do serial = product.code). Requer um produto seedado no admin (ver RB-0009 Passo 0 / DD-0012).\n\nComportamento real (2026-06-12, localhost:8084):\n- /admin/actuator/health -> 302 (login)\n- /admin/api/v1/products/code/{code valido} + x-api-key -> 200 {id,name,priority,...}\n- mesmo endpoint SEM x-api-key -> 401\n- /admin/api/v1/products/code/{code inexistente} + x-api-key -> 404",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "x-api-key", "type": "string" },
+      { "key": "value", "value": "{{ADMIN_API_KEY}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "[00] Saúde",
+      "item": [
+        {
+          "name": "Health (atrás do login)",
+          "protocolProfileBehavior": { "followRedirects": false },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 302 (redireciona para /admin/login)', function () {",
+                  "    pm.response.to.have.status(302);",
+                  "});",
+                  "pm.test('Location aponta para /admin/login', function () {",
+                  "    var loc = pm.response.headers.get('Location') || '';",
+                  "    pm.expect(loc).to.include('/admin/login');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ADMIN_BASE_URL}}/actuator/health",
+              "host": ["{{ADMIN_BASE_URL}}"],
+              "path": ["actuator", "health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[01] Produtos (validação de serial)",
+      "item": [
+        {
+          "name": "Categoria por code de produto (válido)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Retorna a categoria (id + name)', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.be.an('object');",
+                  "    pm.expect(b).to.have.property('id');",
+                  "    pm.expect(b).to.have.property('name');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ADMIN_BASE_URL}}/api/v1/products/code/{{ADMIN_PRODUCT_CODE}}",
+              "host": ["{{ADMIN_BASE_URL}}"],
+              "path": ["api", "v1", "products", "code", "{{ADMIN_PRODUCT_CODE}}"]
+            }
+          }
+        },
+        {
+          "name": "Categoria por code inexistente → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404 (code sem produto)', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ADMIN_BASE_URL}}/api/v1/products/code/{{ADMIN_PRODUCT_CODE_UNKNOWN}}",
+              "host": ["{{ADMIN_BASE_URL}}"],
+              "path": ["api", "v1", "products", "code", "{{ADMIN_PRODUCT_CODE_UNKNOWN}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[02] Erros de Autenticação",
+      "item": [
+        {
+          "name": "[Erro] /admin/api sem x-api-key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401 sem x-api-key', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{ADMIN_BASE_URL}}/api/v1/products/code/{{ADMIN_PRODUCT_CODE}}",
+              "host": ["{{ADMIN_BASE_URL}}"],
+              "path": ["api", "v1", "products", "code", "{{ADMIN_PRODUCT_CODE}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

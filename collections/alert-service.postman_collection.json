@@ -32,7 +32,10 @@
     }
   ],
   "variable": [
-    { "key": "ALERT_API_KEY", "value": "", "type": "string" }
+    { "key": "ALERT_API_KEY", "value": "", "type": "string" },
+    { "key": "ALERT_JWT", "value": "", "type": "string" },
+    { "key": "ALERT_AGENT_JWT", "value": "" },
+    { "key": "ALERT_AGENT_DEVICE_ID", "value": "" }
   ],
   "item": [
     {
@@ -248,6 +251,240 @@
               "raw": "{{ALERT_BASE_URL}}/auth/login",
               "host": ["{{ALERT_BASE_URL}}"],
               "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[03] Meus devices",
+      "description": "Confere se o device da tomada independente está cadastrado para o usuário do environment.\n\nLogin (`POST /auth/login`, público) devolve `{token}`. `GET /api/v1/devices` exige o `x-api-key` criptografado E o Bearer JWT (`FetchUserDevicesController`), e devolve `[{id, serialNumber, nickname, city, notificables}]` do usuário logado.\n\nProcura `ALERT_TI_SERIAL` na lista e grava o `id` (UUID que trafega no MQTT) em `EVENTS_TI_DEVICE_ID`. Para persistir o UUID no arquivo de environment, rode com `--export-environment`.\n\nRequer `ALERT_USER_LOGIN` e `ALERT_USER_PASSWORD`; sem eles, os dois requests são pulados.",
+      "item": [
+        {
+          "name": "Login do usuário do environment",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sem credencial no environment, o request é pulado (o smoke continua verde).",
+                  "if (!pm.environment.get('ALERT_USER_LOGIN') || !pm.environment.get('ALERT_USER_PASSWORD')) {",
+                  "    console.log('ALERT_USER_LOGIN/ALERT_USER_PASSWORD vazios — pulando [03] Meus devices');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Retorna token JWT', function () {",
+                  "    var token = pm.response.json().token;",
+                  "    pm.expect(token, 'resposta sem token').to.match(/^eyJ[A-Za-z0-9_-]+./);",
+                  "    pm.collectionVariables.set('ALERT_JWT', token);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{ALERT_USER_LOGIN}}\",\n  \"password\": \"{{ALERT_USER_PASSWORD}}\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Meus devices (procura ALERT_TI_SERIAL)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sem credencial no environment, o request é pulado (o smoke continua verde).",
+                  "if (!pm.environment.get('ALERT_USER_LOGIN') || !pm.environment.get('ALERT_USER_PASSWORD')) {",
+                  "    console.log('ALERT_USER_LOGIN/ALERT_USER_PASSWORD vazios — pulando [03] Meus devices');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var devices = pm.response.json();",
+                  "pm.test('Resposta é array', function () {",
+                  "    pm.expect(devices).to.be.an('array');",
+                  "});",
+                  "console.log('Devices do usuário: ' + devices.map(function (d) { return d.serialNumber + ' -> ' + d.id; }).join(', '));",
+                  "var serial = pm.environment.get('ALERT_TI_SERIAL');",
+                  "var ti = devices.find(function (d) { return d.serialNumber === serial; });",
+                  "pm.test('Serial ' + serial + ' cadastrado para o usuário', function () {",
+                  "    pm.expect(ti, 'serial ' + serial + ' não está na lista do usuário').to.exist;",
+                  "});",
+                  "if (ti) {",
+                  "    pm.environment.set('EVENTS_TI_DEVICE_ID', ti.id);",
+                  "    console.log('EVENTS_TI_DEVICE_ID = ' + ti.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{ALERT_JWT}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[04] Login do agent (PVD develop)",
+      "description": "Login que o PVD develop (5.02.03, AUTH_STRATEGY=modern) faz ao entrar no Alerta24h: POST /auth/agent/login com usuário, senha e serial do nobreak (ModernAuthStrategy.java). Rota pública, sem x-api-key (SecurityConfiguration: /auth/** permitAll; o ApiKeyFilter só cobre /api/v1/*).\n\nDevolve {token, deviceId}. O deviceId é o UUID que o PVD usa nos tópicos MQTT a24h/{deviceId}/... Se ALERT_TI_SERIAL não estiver associado ao usuário, o alert-service responde 400 (DeviceNotAuthorizedException).\n\nGrava ALERT_AGENT_JWT e ALERT_AGENT_DEVICE_ID. Requer ALERT_USER_LOGIN e ALERT_USER_PASSWORD; sem eles, a pasta é pulada.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Sem credencial no environment, o request é pulado.",
+              "if (!pm.environment.get('ALERT_USER_LOGIN') || !pm.environment.get('ALERT_USER_PASSWORD')) {",
+              "    console.log('ALERT_USER_LOGIN/ALERT_USER_PASSWORD vazios, pulando [04] Login do agent');",
+              "    pm.execution.skipRequest();",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Login do agent com o serial do environment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var b = {};",
+                  "try { b = pm.response.json(); } catch (e) {}",
+                  "pm.test('Retorna token JWT', function () { pm.expect(b.token, 'resposta sem token').to.match(/^eyJ[A-Za-z0-9_-]+./); });",
+                  "pm.test('Retorna deviceId (UUID)', function () { pm.expect(b.deviceId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i); });",
+                  "if (b.token) { pm.collectionVariables.set('ALERT_AGENT_JWT', b.token); }",
+                  "if (b.deviceId) { pm.collectionVariables.set('ALERT_AGENT_DEVICE_ID', b.deviceId); console.log('deviceId do serial ' + pm.environment.get('ALERT_TI_SERIAL') + ' = ' + b.deviceId + ' (topicos MQTT a24h/' + b.deviceId + '/...)'); }",
+                  "var esperado = pm.environment.get('EVENTS_TI_DEVICE_ID');",
+                  "if (esperado && b.deviceId) {",
+                  "    pm.test('deviceId igual ao de [03] Meus devices', function () { pm.expect(b.deviceId).to.eql(esperado); });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{ALERT_USER_LOGIN}}\",\n  \"password\": \"{{ALERT_USER_PASSWORD}}\",\n  \"serialNumber\": \"{{ALERT_TI_SERIAL}}\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/agent/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "agent", "login"]
+            }
+          }
+        },
+        {
+          "name": "Serial não associado ao usuário → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{ALERT_USER_LOGIN}}\",\n  \"password\": \"{{ALERT_USER_PASSWORD}}\",\n  \"serialNumber\": \"000000000000\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/agent/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "agent", "login"]
+            }
+          }
+        },
+        {
+          "name": "Senha errada → 4xx",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 4xx', function () { pm.expect(pm.response.code).to.be.within(400, 499); });",
+                  "console.log('Senha errada no login do agent: HTTP ' + pm.response.code);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{ALERT_USER_LOGIN}}\",\n  \"password\": \"bbd-tests-senha-errada\",\n  \"serialNumber\": \"{{ALERT_TI_SERIAL}}\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/agent/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "agent", "login"]
             }
           }
         }

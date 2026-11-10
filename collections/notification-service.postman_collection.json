@@ -1,0 +1,67 @@
+{
+  "info": {
+    "_postman_id": "a24h-notification-service-0001",
+    "name": "alerta24h-notification-service",
+    "description": "Smoke tests do serviço notification-service do Alerta24h (sms-legrand-a24h-notification-service).\n\nEscopo: este serviço já é exercitado de ponta a ponta pela coleção `alert-flow` (cadastro -> RabbitMQ -> notification -> MailHog -> ativação). Aqui cobrimos apenas o que falta: o **health/liveness** HTTP do serviço em si.\n\nRuntime (RB-0006-A24H):\n- App roda no host (IntelliJ) na porta **8083**, context-path `/`, profile `local` (RabbitMQ + MockServer).\n- Health: `GET /actuator/health` -> 200 `{\"status\":\"UP\"}`.\n- Swagger UI publico em `/swagger-ui.html` (springdoc).\n\nNao ha endpoint REST de negocio publico relevante para smoke: o disparo de e-mail/SMS/push e acionado por mensageria (RabbitMQ), nao por chamada HTTP direta — por isso o fluxo de e-mail vive no `alert-flow`, nao aqui.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "[00] Saúde",
+      "item": [
+        {
+          "name": "Health → UP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status === UP', function () {",
+                  "    var b = pm.response.json();",
+                  "    pm.expect(b).to.have.property('status', 'UP');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{NOTIFICATION_BASE_URL}}/actuator/health",
+              "host": ["{{NOTIFICATION_BASE_URL}}"],
+              "path": ["actuator", "health"]
+            }
+          }
+        },
+        {
+          "name": "Swagger UI público",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 (swagger-ui acessível sem auth)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{NOTIFICATION_BASE_URL}}/swagger-ui.html",
+              "host": ["{{NOTIFICATION_BASE_URL}}"],
+              "path": ["swagger-ui.html"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

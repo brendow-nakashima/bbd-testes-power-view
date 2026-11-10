@@ -6,7 +6,11 @@
     "setup": "rm -rf node_modules && rm -f package-lock.json && npm install",
     "test:local": "./bin/run-tests.sh local",
     "test:events": "./bin/run-tests.sh local events-processing",
-    "test:alert": "./bin/run-tests.sh local alert-service"
+    "test:alert": "./bin/run-tests.sh local alert-service",
+    "test:admin": "./bin/run-tests.sh local admin-service",
+    "test:alert-flow": "./bin/run-tests.sh local alert-flow",
+    "test:notification": "./bin/run-tests.sh local notification-service",
+    "test:pvd-adapter": "./bin/run-tests.sh local pvd-legacy-adapter"
   },
   "author": "",
   "license": "ISC",
