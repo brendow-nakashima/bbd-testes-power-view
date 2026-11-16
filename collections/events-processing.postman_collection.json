@@ -246,6 +246,20 @@
                   "    pm.expect(b).to.be.an('array').that.is.not.empty;",
                   "    pm.expect(b[0]).to.have.property('id');",
                   "    pm.expect(b[0]).to.have.property('description');",
+                  "});",
+                  "// Catalogo da main com a tomada em 10 a 12 (ADR-0009-A24H v8, merge da main de 11/11).",
+                  "// 7 e 8 vazios, 9 reservado: nenhum dos tres pode aparecer.",
+                  "pm.test('Catalogo da main: 1 a 6 e a tomada em 10, 11 e 12', function () {",
+                  "    var ids = pm.response.json().map(function (t) { return Number(t.id); }).sort(function (a, c) { return a - c; });",
+                  "    pm.expect(ids).to.eql([1, 2, 3, 4, 5, 6, 10, 11, 12]);",
+                  "});",
+                  "pm.test('Descricoes da tomada em 10 a 12', function () {",
+                  "    var byId = {};",
+                  "    pm.response.json().forEach(function (t) { byId[Number(t.id)] = t.description; });",
+                  "    pm.expect(byId[10]).to.eql('Ligar Tomada Independente');",
+                  "    pm.expect(byId[11]).to.eql('Desligar Tomada Independente');",
+                  "    pm.expect(byId[12]).to.eql('Reiniciar Tomada Independente');",
+                  "    pm.expect(byId[1]).to.eql('Desligar e Ligar Nobreak');",
                   "});"
                 ]
               }
@@ -291,13 +305,18 @@
           }
         },
         {
-          "name": "Agendar comando de tomada (F1 da 113)",
+          "name": "Agendar comando de tomada (F1 da 113, opt-in)",
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "// Opt-in: agenda um desligamento real da tomada do EVENTS_TI_DEVICE_ID.",
+                  "if (pm.variables.get('TOMADA_ESCRITA_SENSIVEL') !== 'true') {",
+                  "    console.log('Pulado: escrita sensivel desligada (TOMADA_ESCRITA_SENSIVEL != true): ' + pm.info.requestName);",
+                  "    pm.execution.skipRequest();",
+                  "}",
                   "// Agenda o comando para daqui a poucos minutos, no formato que a tela usa:",
                   "// `${date}T${time}`, sem segundos e sem fuso. O backend interpreta no",
                   "// spring.jackson.time-zone (America/Sao_Paulo), que e o fuso desta maquina.",
@@ -339,7 +358,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 8,\n  \"frequency\": 1,\n  \"executionAt\": \"{{F1_EXECUTION_AT}}\",\n  \"duration\": 0,\n  \"scheduled\": true,\n  \"targetOutlet\": 1\n}",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 11,\n  \"frequency\": 1,\n  \"executionAt\": \"{{F1_EXECUTION_AT}}\",\n  \"duration\": 0,\n  \"scheduled\": true,\n  \"targetOutlet\": 1\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -347,7 +366,7 @@
               "host": ["{{EVENTS_BASE_URL}}"],
               "path": ["api", "v1", "tasks"]
             },
-            "description": "Verificacao F1 do PI-0006-A24H (atividade 113): prova que uma tarefa de Tomada Independente com `scheduled: true` desce pelo canal e e guardada pelo PVD ate o minuto marcado.\n\nPRE-REQUISITOS, nesta ordem:\n1. Ambiente do RB-0001 de pe, com o events-processing na 8082.\n2. Capacidade publicada para o device, porque o firmware nunca publica outlet-capacity:\n   docker exec mosquitto-mqtt-broker mosquitto_pub -h 127.0.0.1 -p 1883 -q 1 \\\n     -t \"a24h/{{EVENTS_TI_DEVICE_ID}}/outlet-capacity\" -m '{\"outletCount\":2}'\n3. Um assinante observando o fio ANTES de rodar:\n   docker exec mosquitto-mqtt-broker mosquitto_sub -h 127.0.0.1 -p 1883 -t 'pvd/+/task' -v\n\nATENCAO ao device: usa EVENTS_TI_DEVICE_ID, o UPS de bancada ao qual o PVD esta conectado. NAO usa o device-seed EVENTS_DEVICE_ID, que nenhum PVD escuta.\n\ntype 8 = Desligar Tomada Independente. frequency 1 = Uma vez."
+            "description": "Verificacao F1 do PI-0006-A24H (atividade 113): prova que uma tarefa de Tomada Independente com `scheduled: true` desce pelo canal e e guardada pelo PVD ate o minuto marcado.\n\nPRE-REQUISITOS, nesta ordem:\n1. Ambiente do RB-0001 de pe, com o events-processing na 8082.\n2. Capacidade publicada para o device, porque o firmware nunca publica outlet-capacity:\n   docker exec mosquitto-mqtt-broker mosquitto_pub -h 127.0.0.1 -p 1883 -q 1 \\\n     -t \"a24h/{{EVENTS_TI_DEVICE_ID}}/outlet-capacity\" -m '{\"outletCount\":2}'\n3. Um assinante observando o fio ANTES de rodar:\n   docker exec mosquitto-mqtt-broker mosquitto_sub -h 127.0.0.1 -p 1883 -t 'pvd/+/task' -v\n\nATENCAO ao device: usa EVENTS_TI_DEVICE_ID, o UPS de bancada ao qual o PVD esta conectado. NAO usa o device-seed EVENTS_DEVICE_ID, que nenhum PVD escuta.\n\ntype 11 = Desligar Tomada Independente, no catalogo da main (ADR-0009-A24H v8). Ate 11/11 era o 8, que deixou de existir. frequency 1 = Uma vez."
           }
         }
       ]
@@ -379,6 +398,159 @@
               "host": ["{{EVENTS_BASE_URL}}"],
               "path": ["api", "v1", "telemetries", "{{EVENTS_DEVICE_ID}}"]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[06] Tomada Independente - catalogo da main (opt-in)",
+      "description": "Verifica o merge da main na develop-clamper (PI-0009-A24H, fase 5): a tomada em 10, 11 e 12, no imediato e no agendado (ADR-0009-A24H v8).\n\nOPT-IN: os comandos cortam energia da carga ligada na tomada do EVENTS_TI_DEVICE_ID. So rodam com TOMADA_ESCRITA_SENSIVEL = true. Os dois [Erro] rodam sempre, porque sao recusados antes de gravar e de publicar.\n\nPRE-REQUISITOS:\n1. EVENTS_TI_DEVICE_ID preenchido com o deviceId do UPS com tomada no ambiente.\n2. Capacidade da tomada conhecida pela nuvem (linha em device_outlet_capacities). Sem ela, o gate de capacidade responde 409.\n3. Um assinante no fio ANTES de rodar, para conferir tipoEvento 10, 11 e 12 e o targetOutlet:\n   mosquitto_sub -t 'pvd/<deviceId>/task' -v (no dev, pelo EMQX do namespace emqx).\n\nO equipamento so executa certo depois do ajuste do firmware e do PVD ao catalogo novo (PI-0009-A24H, P2 e P3). Aqui a prova e o 201 e o payload no fio.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var nome = pm.info.requestName || '';",
+              "if (nome.indexOf('[Erro]') !== 0 && pm.variables.get('TOMADA_ESCRITA_SENSIVEL') !== 'true') {",
+              "    console.log('Pulado: escrita sensivel desligada (TOMADA_ESCRITA_SENSIVEL != true): ' + nome);",
+              "    pm.execution.skipRequest();",
+              "}",
+              "// Mesmo formato da tela: `${date}T${time}`, sem segundos e sem fuso (America/Sao_Paulo no backend).",
+              "var p = function (n) { return String(n).padStart(2, '0'); };",
+              "var fmt = function (d) {",
+              "    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());",
+              "};",
+              "var minutos = Number(pm.environment.get('F1_MINUTOS_A_FRENTE') || 3);",
+              "pm.collectionVariables.set('TI_AGORA', fmt(new Date()));",
+              "pm.collectionVariables.set('TI_AGENDADO', fmt(new Date(Date.now() + minutos * 60 * 1000)));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if ((pm.info.requestName || '').indexOf('[Erro]') !== 0) {",
+              "    pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+              "    pm.test('Resposta traz taskId', function () {",
+              "        pm.expect(pm.response.json().taskId).to.be.a('string').and.not.empty;",
+              "    });",
+              "    console.log('[TI] ' + pm.info.requestName + ' -> ' + pm.response.text());",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Desligar Tomada - imediato (11)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 11,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks", "host": ["{{EVENTS_BASE_URL}}"], "path": ["api", "v1", "tasks"] },
+            "description": "No fio: tipoEvento 11, programada false, targetOutlet 1."
+          }
+        },
+        {
+          "name": "Ligar Tomada - imediato (10)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 10,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks", "host": ["{{EVENTS_BASE_URL}}"], "path": ["api", "v1", "tasks"] },
+            "description": "No fio: tipoEvento 10, programada false, targetOutlet 1. Roda depois do Desligar, para a carga terminar ligada."
+          }
+        },
+        {
+          "name": "Reiniciar Tomada - imediato (12)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 12,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 1,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks", "host": ["{{EVENTS_BASE_URL}}"], "path": ["api", "v1", "tasks"] },
+            "description": "No fio: tipoEvento 12, duracao 1 (minutos, faixa 1 a 9999), programada false, targetOutlet 1."
+          }
+        },
+        {
+          "name": "Reiniciar Tomada - agendado (12)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 12,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGENDADO}}\",\n  \"duration\": 2,\n  \"scheduled\": true,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks", "host": ["{{EVENTS_BASE_URL}}"], "path": ["api", "v1", "tasks"] },
+            "description": "Agendado para daqui a F1_MINUTOS_A_FRENTE minutos, uma vez. No fio: tipoEvento 12, duracao 2, programada true, targetOutlet 1. A tarefa fica gravada: conferir em GET /api/v1/tasks/{deviceId}."
+          }
+        },
+        {
+          "name": "[Erro] Reiniciar Tomada com duration 0 -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400 (tempo de religamento fora de 1 a 9999)', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 12,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks", "host": ["{{EVENTS_BASE_URL}}"], "path": ["api", "v1", "tasks"] },
+            "description": "TaskDurationCalculator recusa antes de gravar e de publicar (RestartDurationOutOfRangeException)."
+          }
+        },
+        {
+          "name": "[Erro] Tipo 8, vazio no catalogo -> recusado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// TaskType.fromId lanca IllegalArgumentException. O status exato depende do handler: aqui so se exige que nao seja 2xx.",
+                  "pm.test('Nao aceita o tipo 8 (era Desligar Tomada ate 11/11)', function () {",
+                  "    pm.expect(pm.response.code).to.be.at.least(400);",
+                  "});",
+                  "console.log('[TI] tipo 8 -> ' + pm.response.code + ' ' + pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 8,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{EVENTS_BASE_URL}}/api/v1/tasks", "host": ["{{EVENTS_BASE_URL}}"], "path": ["api", "v1", "tasks"] }
           }
         }
       ]

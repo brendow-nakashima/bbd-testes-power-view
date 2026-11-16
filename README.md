@@ -115,8 +115,9 @@ Depois rode os testes HTTP para ver o dado persistido.
 | `[01] Telemetria` | `GET /api/v1/telemetries/{deviceId}` |
 | `[02] Timelines` | `GET /api/v1/timelines` e `/consolidated-timelines/{deviceId}` |
 | `[03] Status do Dispositivo` | `GET /api/v1/devices/status/{deviceId}` |
-| `[04] Tasks` | `GET /api/v1/tasks/{deviceId}`, `/types`, `/frequencies` |
+| `[04] Tasks` | `GET /api/v1/tasks/{deviceId}`, `/frequencies` e `/types`, que confere o catálogo da `main`: ids `1..6, 10, 11, 12`. Mais um `POST` agendado de Desligar Tomada (`type: 11`), opt-in por `TOMADA_ESCRITA_SENSIVEL=true` |
 | `[05] Erros de Autenticação` | `[Erro]` telemetria sem `x-api-key` → 401 |
+| `[06] Tomada Independente - catalogo da main (opt-in)` | `POST /api/v1/tasks` com 11, 10 e 12 no imediato, 12 no agendado, e dois `[Erro]`: Reiniciar com `duration: 0` → 400, e tipo 8 recusado. Os comandos só rodam com `TOMADA_ESCRITA_SENSIVEL=true` |
 
 ---
 
@@ -133,6 +134,66 @@ cifrado (mesmo `d9Qk…`/`TomatoIsFruit000` do events) calculado no pre-request 
 
 > **Read-only por design:** o fluxo JWT (registrar → ativar por e-mail → login) cria dados e os
 > usuários-seed da V4 não logam — fora do smoke. Ver CLAUDE.md para o modelo de auth completo.
+
+---
+
+## Validar o merge da `main` no dev (catálogo de tarefas novo)
+
+Em 11/11 a `main` entrou na `develop-clamper` nos cinco serviços, e o catálogo de tarefas mudou: ids
+1 a 6 da `main`, 7 e 8 vazios, 9 reservado e a **tomada em 10, 11 e 12** (antes, 7 a 9). O deploy no dev
+foi feito em 16/11. Plano: `PI-0009-A24H` (fase 5) e `ADR-0009-A24H` v8, no `design-docs-power-view`.
+
+### 1. Preencher o env `dev`
+
+`environments/dev.postman_environment.json` vai para o git com os segredos **vazios**. Preencha-os só na
+sua máquina (no Postman, ou no arquivo sem commitar):
+
+| Variável | O que é |
+|---|---|
+| `EVENTS_API_KEY_RAW`, `ALERT_API_KEY_RAW` | o `APP_HTTP_API_KEY` do dev (`ENV_FILE_DEV` do GitLab) |
+| `EVENTS_API_KEY_SECRET`, `ALERT_API_KEY_SECRET` | a chave AES do dev |
+| `ALERT_USER_LOGIN`, `ALERT_USER_PASSWORD` | usuário do dev dono do UPS de bancada |
+| `EVENTS_TI_DEVICE_ID` | `deviceId` do UPS com tomada (serial `ALERT_TI_SERIAL` = `295010007306`). Ver o passo 2 |
+| `TOMADA_ESCRITA_SENSIVEL` | `false` por padrão. `true` manda os comandos de verdade e **corta energia da carga** |
+
+### 2. Descobrir o `EVENTS_TI_DEVICE_ID`
+
+A pasta `[03] Meus devices` do `alert-service` faz login com o usuário do env, procura o
+`ALERT_TI_SERIAL` e grava o `deviceId` em `EVENTS_TI_DEVICE_ID`:
+
+```bash
+bash ./bin/run-tests.sh dev alert-service '[03] Meus devices'
+```
+
+No Postman, a variável fica no env e a próxima coleção já a usa. **No Newman, não**: cada execução lê o
+arquivo de novo. Copie o valor do log (`EVENTS_TI_DEVICE_ID = ...`) para o env.
+
+### 3. Rodar
+
+```bash
+# Saúde e catálogo (só leitura): o teste "Catalogo da main" tem de passar
+bash ./bin/run-tests.sh dev events-processing '[00] Saúde'
+bash ./bin/run-tests.sh dev events-processing '[04] Tasks'
+
+# Comandos da tomada (com TOMADA_ESCRITA_SENSIVEL=true no env)
+bash ./bin/run-tests.sh dev events-processing '[06] Tomada Independente - catalogo da main (opt-in)'
+```
+
+Os scripts `npm run test:*` usam o env `local`. Para o dev, use o `run-tests.sh` como acima.
+
+> O `[04] Tasks` também tem um `POST` agendado de Desligar Tomada (`type: 11`) no
+> `EVENTS_TI_DEVICE_ID`, para daqui a `F1_MINUTOS_A_FRENTE` minutos. Ele segue o mesmo opt-in: só roda
+> com `TOMADA_ESCRITA_SENSIVEL=true`.
+
+### 4. Conferir no fio e nos logs
+
+O `201` prova que a nuvem aceitou e gravou. Para ver o que desce para o equipamento, deixe um assinante em
+`pvd/<deviceId>/task` antes de rodar, e confira `tipoEvento` 10, 11 e 12, `duracao` e `targetOutlet`.
+Para o acesso ao cluster (`kubectl`, namespaces `alerta24h` e `emqx`), ver o `DR-0014-A24H` §4.12 no
+`design-docs-power-view`.
+
+O UPS só executa certo depois que o firmware e o PVD forem ajustados ao catálogo novo (premissas P2 e P3
+do `PI-0009-A24H`).
 
 ---
 
