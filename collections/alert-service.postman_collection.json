@@ -285,7 +285,8 @@
                   "pm.test('Retorna token JWT', function () {",
                   "    var token = pm.response.json().token;",
                   "    pm.expect(token, 'resposta sem token').to.match(/^eyJ[A-Za-z0-9_-]+./);",
-                  "    pm.collectionVariables.set('ALERT_JWT', token);",
+                  "    pm.environment.set('ALERT_JWT', token);",
+                  "    console.log('ALERT_JWT gravado no env');",
                   "});"
                 ]
               }
@@ -485,6 +486,359 @@
               "raw": "{{ALERT_BASE_URL}}/auth/agent/login",
               "host": ["{{ALERT_BASE_URL}}"],
               "path": ["auth", "agent", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "[05] Tarefas e Tomada Independente - catalogo da main",
+      "description": "Verifica o merge da main na develop-clamper no dev (PI-0009-A24H, fase 5) pelo caminho do portal: o proxy de tarefas do alert-service. O events-processing nao tem Ingress no dev (ingress.enabled vem de INGRESS_ENABLED, fechado por padrao), entao a colecao events-processing nao alcanca o dev.\n\nRotas (DeviceTasksController e TaskReferenceDataController): GET /api/v1/tasks/types, GET /api/v1/devices/{deviceId}/tasks e POST /api/v1/devices/{deviceId}/tasks. Exigem o x-api-key cifrado E o Bearer JWT do dono do device (checagem de posse pelo {deviceId} do path; o deviceId do corpo e sobrescrito).\n\nDiferencas do proxy em relacao ao events-processing: o POST responde 200 (nao 201), e qualquer erro do events vira 500 generico (EventsProcessingHttpClient + RestControllerExceptionHandler). O motivo real fica no log do pod do alert-service: 'events-processing (...) respondeu <status> - corpo: ...'.\n\nAuto-suficiente, numa execucao so (sequencia S1 do RB-0003-A24H no design-docs): o Login grava ALERT_JWT no env e o 'Device da tomada' grava EVENTS_TI_DEVICE_ID no env, achado pelo ALERT_TI_SERIAL. Sem eles, os passos seguintes sao pulados com o motivo no console. Entradas manuais: ALERT_API_KEY_RAW, ALERT_API_KEY_SECRET, ALERT_USER_LOGIN, ALERT_USER_PASSWORD.\n\nOPT-IN: os quatro 'Comando' cortam energia da carga ligada na tomada. So rodam com TOMADA_ESCRITA_SENSIVEL = true. Antes de rodar, assinar pvd/<deviceId>/task no broker do dev e conferir tipoEvento 10, 11 e 12, duracao e targetOutlet.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          { "key": "token", "value": "{{ALERT_JWT}}", "type": "string" }
+        ]
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Cadeia de variaveis: RB-0003-A24H. Login produz ALERT_JWT (env), Device produz EVENTS_TI_DEVICE_ID (env).",
+              "var nome = pm.info.requestName || '';",
+              "var ehLogin = nome.indexOf('Login') === 0;",
+              "var ehDevice = nome.indexOf('Device da tomada') === 0;",
+              "var usaDevice = !ehLogin && !ehDevice && nome.indexOf('Tipos de task') !== 0;",
+              "var pular = function (motivo) { console.log('Pulado [05] ' + nome + ': ' + motivo); pm.execution.skipRequest(); };",
+              "if (!pm.environment.get('ALERT_USER_LOGIN') || !pm.environment.get('ALERT_USER_PASSWORD')) {",
+              "    pular('ALERT_USER_LOGIN/ALERT_USER_PASSWORD vazios (entrada manual, RB-0003 §3)');",
+              "} else if (!ehLogin && !pm.environment.get('ALERT_JWT')) {",
+              "    pular('sem ALERT_JWT no env: rode a pasta a partir do Login');",
+              "} else if (usaDevice && !pm.environment.get('EVENTS_TI_DEVICE_ID')) {",
+              "    pular('sem EVENTS_TI_DEVICE_ID no env: rode o Device da tomada antes');",
+              "} else if (nome.indexOf('Comando') === 0 && pm.variables.get('TOMADA_ESCRITA_SENSIVEL') !== 'true') {",
+              "    pular('escrita sensivel desligada (TOMADA_ESCRITA_SENSIVEL != true)');",
+              "}",
+              "// Mesmo formato da tela: `${date}T${time}`, sem segundos e sem fuso (America/Sao_Paulo no backend).",
+              "var p = function (n) { return String(n).padStart(2, '0'); };",
+              "var fmt = function (d) {",
+              "    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());",
+              "};",
+              "var minutos = Number(pm.environment.get('F1_MINUTOS_A_FRENTE') || 3);",
+              "pm.collectionVariables.set('TI_AGORA', fmt(new Date()));",
+              "pm.collectionVariables.set('TI_AGENDADO', fmt(new Date(Date.now() + minutos * 60 * 1000)));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if ((pm.info.requestName || '').indexOf('Comando') === 0) {",
+              "    pm.test('Status 200 (o proxy responde 200, o events responde 201)', function () { pm.response.to.have.status(200); });",
+              "    pm.test('Resposta traz taskId', function () {",
+              "        pm.expect(pm.response.json().taskId).to.be.a('string').and.not.empty;",
+              "    });",
+              "    console.log('[TI] ' + pm.info.requestName + ' -> ' + pm.response.text());",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Login do usuario do environment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Retorna token JWT', function () {",
+                  "    var token = pm.response.json().token;",
+                  "    pm.expect(token, 'resposta sem token').to.match(/^eyJ[A-Za-z0-9_-]+./);",
+                  "    pm.environment.set('ALERT_JWT', token);",
+                  "    console.log('ALERT_JWT gravado no env');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{ALERT_USER_LOGIN}}\",\n  \"password\": \"{{ALERT_USER_PASSWORD}}\"\n}"
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/auth/login",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Device da tomada (procura ALERT_TI_SERIAL)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var serial = pm.environment.get('ALERT_TI_SERIAL');",
+                  "var ti = pm.response.json().find(function (d) { return d.serialNumber === serial; });",
+                  "pm.test('Serial ' + serial + ' cadastrado para o usuario', function () {",
+                  "    pm.expect(ti, 'serial ' + serial + ' nao esta na lista do usuario').to.exist;",
+                  "});",
+                  "if (ti) {",
+                  "    var anterior = pm.environment.get('EVENTS_TI_DEVICE_ID');",
+                  "    if (anterior && anterior !== ti.id) {",
+                  "        console.log('ATENCAO: EVENTS_TI_DEVICE_ID do env (' + anterior + ') trocado pelo device do serial.');",
+                  "    }",
+                  "    pm.environment.set('EVENTS_TI_DEVICE_ID', ti.id);",
+                  "    console.log('EVENTS_TI_DEVICE_ID = ' + ti.id);",
+                  "} else {",
+                  "    pm.environment.unset('EVENTS_TI_DEVICE_ID');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices"]
+            }
+          }
+        },
+        {
+          "name": "Tipos de task (catalogo da main)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "// ADR-0009-A24H v8: 1 a 6 da main, 7 e 8 vazios, 9 reservado, tomada em 10, 11 e 12.",
+                  "pm.test('Catalogo da main: 1 a 6 e a tomada em 10, 11 e 12', function () {",
+                  "    var ids = pm.response.json().map(function (t) { return Number(t.id); }).sort(function (a, c) { return a - c; });",
+                  "    pm.expect(ids).to.eql([1, 2, 3, 4, 5, 6, 10, 11, 12]);",
+                  "});",
+                  "pm.test('Descricoes da tomada em 10 a 12', function () {",
+                  "    var byId = {};",
+                  "    pm.response.json().forEach(function (t) { byId[Number(t.id)] = t.description; });",
+                  "    pm.expect(byId[10]).to.eql('Ligar Tomada Independente');",
+                  "    pm.expect(byId[11]).to.eql('Desligar Tomada Independente');",
+                  "    pm.expect(byId[12]).to.eql('Reiniciar Tomada Independente');",
+                  "    pm.expect(byId[1]).to.eql('Desligar e Ligar Nobreak');",
+                  "});",
+                  "console.log('[TI] tipos: ' + pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/tasks/types",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "tasks", "types"]
+            }
+          }
+        },
+        {
+          "name": "Tarefas do device (le as tarefas gravadas)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Um 500 aqui e o sintoma da Q-02 do PI-0009-A24H: tarefa gravada com TURN_OFF_NOBREAK ou",
+                  "// TURN_OFF_AND_TURN_ON_NOBREAK, nomes que nao existem no TaskType da main. Confirmar no log do",
+                  "// events-processing: 'No enum constant ... TaskType.TURN_OFF_NOBREAK'.",
+                  "pm.test('Status 200 (500 = provavel Q-02, tarefa antiga no banco)', function () { pm.response.to.have.status(200); });",
+                  "console.log('[TI] tarefas do device: ' + pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
+            }
+          }
+        },
+        {
+          "name": "Comando - Desligar Tomada, imediato (11)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 11,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
+            },
+            "description": "No fio: tipoEvento 11, programada false, targetOutlet 1."
+          }
+        },
+        {
+          "name": "Comando - Ligar Tomada, imediato (10)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 10,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
+            },
+            "description": "No fio: tipoEvento 10, programada false, targetOutlet 1. Roda depois do Desligar, para a carga terminar ligada."
+          }
+        },
+        {
+          "name": "Comando - Reiniciar Tomada, imediato (12)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 12,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 1,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
+            },
+            "description": "No fio: tipoEvento 12, duracao 1 (minutos, faixa 1 a 9999), programada false, targetOutlet 1."
+          }
+        },
+        {
+          "name": "Comando - Reiniciar Tomada, agendado (12)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 12,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGENDADO}}\",\n  \"duration\": 2,\n  \"scheduled\": true,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
+            },
+            "description": "Agendado para daqui a F1_MINUTOS_A_FRENTE minutos, uma vez. No fio: tipoEvento 12, duracao 2, programada true, targetOutlet 1. Fica gravada: aparece no 'Tarefas do device' se rodar de novo."
+          }
+        },
+        {
+          "name": "[Erro] Reiniciar Tomada com duration 0 -> recusado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// O events responde 400 (RestartDurationOutOfRangeException). Pelo proxy, chega como 500 generico.",
+                  "pm.test('Recusado (400 no events, 500 pelo proxy)', function () { pm.expect(pm.response.code).to.be.at.least(400); });",
+                  "console.log('[TI] duration 0 -> ' + pm.response.code + ' ' + pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 12,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
+            }
+          }
+        },
+        {
+          "name": "[Erro] Tipo 8, vazio no catalogo -> recusado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Nao aceita o tipo 8 (era Desligar Tomada ate 11/11)', function () { pm.expect(pm.response.code).to.be.at.least(400); });",
+                  "console.log('[TI] tipo 8 -> ' + pm.response.code + ' ' + pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{ALERT_API_KEY}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deviceId\": \"{{EVENTS_TI_DEVICE_ID}}\",\n  \"type\": 8,\n  \"frequency\": 1,\n  \"executionAt\": \"{{TI_AGORA}}\",\n  \"duration\": 0,\n  \"scheduled\": false,\n  \"targetOutlet\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{ALERT_BASE_URL}}/api/v1/devices/{{EVENTS_TI_DEVICE_ID}}/tasks",
+              "host": ["{{ALERT_BASE_URL}}"],
+              "path": ["api", "v1", "devices", "{{EVENTS_TI_DEVICE_ID}}", "tasks"]
             }
           }
         }

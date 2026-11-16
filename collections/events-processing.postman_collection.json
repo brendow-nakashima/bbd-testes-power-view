@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a24h-events-processing-0001",
     "name": "alerta24h-events-processing",
-    "description": "Smoke tests do serviço events-processing (Alerta24h).\n\nAuth: header `x-api-key` **criptografado** — AES-128-ECB/PKCS5 + Base64 da `EVENTS_API_KEY_RAW` com a chave `EVENTS_API_KEY_SECRET`. O valor é calculado no pre-request da coleção via CryptoJS e exposto como a variável `EVENTS_API_KEY`.\n\nPré-requisito: o `EVENTS_DEVICE_ID` precisa existir na tabela `devices` (o serviço rejeita devices desconhecidos). Em local há um device-seed `00000000-0000-0000-0000-000000000001`.\n\nIngestão MQTT não é coberta aqui (Newman não fala MQTT) — use `bin/mqtt-pub.sh` para alimentar dados antes de validar via HTTP.",
+    "description": "Smoke tests do serviço events-processing (Alerta24h).\n\nSO NO AMBIENTE LOCAL: no dev e no hml o servico nao tem Ingress (helm values.yaml_template, ingress.enabled = $INGRESS_ENABLED). Tarefas no dev: colecao alert-service, pasta [05]. Cadeia de variaveis: RB-0003-A24H no design-docs.\n\nAuth: header `x-api-key` **criptografado** — AES-128-ECB/PKCS5 + Base64 da `EVENTS_API_KEY_RAW` com a chave `EVENTS_API_KEY_SECRET`. O valor é calculado no pre-request da coleção via CryptoJS e exposto como a variável `EVENTS_API_KEY`.\n\nPré-requisito: o `EVENTS_DEVICE_ID` precisa existir na tabela `devices` (o serviço rejeita devices desconhecidos). Em local há um device-seed `00000000-0000-0000-0000-000000000001`.\n\nIngestão MQTT não é coberta aqui (Newman não fala MQTT) — use `bin/mqtt-pub.sh` para alimentar dados antes de validar via HTTP.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -312,9 +312,12 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Opt-in: agenda um desligamento real da tomada do EVENTS_TI_DEVICE_ID.",
+                  "// Opt-in: agenda um desligamento real da tomada do EVENTS_TI_DEVICE_ID. So local (RB-0003-A24H §4.2).",
                   "if (pm.variables.get('TOMADA_ESCRITA_SENSIVEL') !== 'true') {",
                   "    console.log('Pulado: escrita sensivel desligada (TOMADA_ESCRITA_SENSIVEL != true): ' + pm.info.requestName);",
+                  "    pm.execution.skipRequest();",
+                  "} else if (!pm.environment.get('EVENTS_TI_DEVICE_ID')) {",
+                  "    console.log('Pulado: sem EVENTS_TI_DEVICE_ID no env. Rode antes alert-service [03] (RB-0003-A24H, S2).');",
                   "    pm.execution.skipRequest();",
                   "}",
                   "// Agenda o comando para daqui a poucos minutos, no formato que a tela usa:",
@@ -404,7 +407,7 @@
     },
     {
       "name": "[06] Tomada Independente - catalogo da main (opt-in)",
-      "description": "Verifica o merge da main na develop-clamper (PI-0009-A24H, fase 5): a tomada em 10, 11 e 12, no imediato e no agendado (ADR-0009-A24H v8).\n\nOPT-IN: os comandos cortam energia da carga ligada na tomada do EVENTS_TI_DEVICE_ID. So rodam com TOMADA_ESCRITA_SENSIVEL = true. Os dois [Erro] rodam sempre, porque sao recusados antes de gravar e de publicar.\n\nPRE-REQUISITOS:\n1. EVENTS_TI_DEVICE_ID preenchido com o deviceId do UPS com tomada no ambiente.\n2. Capacidade da tomada conhecida pela nuvem (linha em device_outlet_capacities). Sem ela, o gate de capacidade responde 409.\n3. Um assinante no fio ANTES de rodar, para conferir tipoEvento 10, 11 e 12 e o targetOutlet:\n   mosquitto_sub -t 'pvd/<deviceId>/task' -v (no dev, pelo EMQX do namespace emqx).\n\nO equipamento so executa certo depois do ajuste do firmware e do PVD ao catalogo novo (PI-0009-A24H, P2 e P3). Aqui a prova e o 201 e o payload no fio.",
+      "description": "SO NO AMBIENTE LOCAL. No dev e no hml o events-processing nao tem Ingress: la a mesma verificacao roda pela colecao alert-service, pasta [05] (RB-0003-A24H no design-docs, sequencia S1).\n\nA tomada em 10, 11 e 12, no imediato e no agendado (ADR-0009-A24H v8). O EVENTS_TI_DEVICE_ID vem do alert-service [03], no mesmo env (sequencia S2).\n\nOPT-IN: os comandos cortam energia da carga ligada na tomada do EVENTS_TI_DEVICE_ID. So rodam com TOMADA_ESCRITA_SENSIVEL = true. Os dois [Erro] rodam sempre, porque sao recusados antes de gravar e de publicar.\n\nPRE-REQUISITOS:\n1. EVENTS_TI_DEVICE_ID preenchido com o deviceId do UPS com tomada no ambiente.\n2. Capacidade da tomada conhecida pela nuvem (linha em device_outlet_capacities). Sem ela, o gate de capacidade responde 409.\n3. Um assinante no fio ANTES de rodar, para conferir tipoEvento 10, 11 e 12 e o targetOutlet:\n   mosquitto_sub -t 'pvd/<deviceId>/task' -v (no dev, pelo EMQX do namespace emqx).\n\nO equipamento so executa certo depois do ajuste do firmware e do PVD ao catalogo novo (PI-0009-A24H, P2 e P3). Aqui a prova e o 201 e o payload no fio.",
       "event": [
         {
           "listen": "prerequest",
@@ -412,7 +415,10 @@
             "type": "text/javascript",
             "exec": [
               "var nome = pm.info.requestName || '';",
-              "if (nome.indexOf('[Erro]') !== 0 && pm.variables.get('TOMADA_ESCRITA_SENSIVEL') !== 'true') {",
+              "if (!pm.environment.get('EVENTS_TI_DEVICE_ID')) {",
+              "    console.log('Pulado: sem EVENTS_TI_DEVICE_ID no env. Rode antes alert-service [03] (RB-0003-A24H, S2): ' + nome);",
+              "    pm.execution.skipRequest();",
+              "} else if (nome.indexOf('[Erro]') !== 0 && pm.variables.get('TOMADA_ESCRITA_SENSIVEL') !== 'true') {",
               "    console.log('Pulado: escrita sensivel desligada (TOMADA_ESCRITA_SENSIVEL != true): ' + nome);",
               "    pm.execution.skipRequest();",
               "}",
